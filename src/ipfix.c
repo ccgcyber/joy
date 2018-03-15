@@ -812,7 +812,6 @@ static void ipfix_template_key_init(struct ipfix_template_key *k,
   k->template_id = template_id;
 }
 
-
 /*
  * @brief Parse through the contents of an IPFIX Template Set.
  *
@@ -1892,7 +1891,7 @@ static void ipfix_process_flow_record(struct flow_record *ix_record,
         flow_data += field_length;
         break;
 
-      case IPFIX_IDP:
+      case IPFIX_COLLECT_IDP:
         if (flag_var_field && (field_length != 0)) {
           /*
            * We have actual IDP data to process
@@ -1963,6 +1962,9 @@ static uint16_t exporter_template_id = 256;
 
 #define ipfix_exp_template_field_macro(a, b) \
   ((struct ipfix_exporter_template_field) {a, b, 0})
+
+#define ipfix_exp_template_ent_field_macro(a, b) \
+  ((struct ipfix_exporter_template_field) {a, b, 9})
 
 
 /*
@@ -3321,6 +3323,13 @@ static void ipfix_exp_template_add_field(struct ipfix_exporter_template *t,
     t->length += 4;
 }
 
+static void ipfix_exp_template_add_ent_field(struct ipfix_exporter_template *t,
+                                             struct ipfix_exporter_template_field f) {
+    t->fields[t->hdr.field_count] = f;
+    t->hdr.field_count++;
+    t->length += 8;
+}
+
 
 /*
  * @brief Create a simple 5-tuple template.
@@ -3419,8 +3428,8 @@ static struct ipfix_exporter_template *ipfix_exp_create_idp_template(void) {
     ipfix_exp_template_add_field(template,
         ipfix_exp_template_field_macro(IPFIX_FLOW_END_MICROSECONDS, 8));
 
-    ipfix_exp_template_add_field(template,
-        ipfix_exp_template_field_macro(IPFIX_IDP, 65535));
+    ipfix_exp_template_add_ent_field(template,
+        ipfix_exp_template_ent_field_macro(IPFIX_IDP, 65535));
 
   } else {
     loginfo("error: template is null");
@@ -3552,6 +3561,7 @@ static int ipfix_exp_encode_template_set(struct ipfix_exporter_template_set *set
     for (i = 0; i < current->hdr.field_count; i++) {
       uint16_t bigend_field_id = htons(current->fields[i].info_elem_id);
       uint16_t bigend_field_len = htons(current->fields[i].fixed_length);
+      uint32_t bigend_ent_num = htonl(current->fields[i].enterprise_num);
 
       /* Encode the field element into message */
       memcpy(data_ptr, (const void *)&bigend_field_id, 2);
@@ -3562,7 +3572,12 @@ static int ipfix_exp_encode_template_set(struct ipfix_exporter_template_set *set
       data_ptr += 2;
       *msg_length += 2;
 
-      /* TODO enterprise bit */
+      /* Enterprise number */
+      if (bigend_ent_num) {
+        memcpy(data_ptr, (const void *)&bigend_ent_num, sizeof(uint32_t));
+        data_ptr += sizeof(uint32_t);
+        *msg_length += sizeof(uint32_t);
+      }
     }
 
     current = current->next;
@@ -3936,6 +3951,7 @@ static int ipfix_exp_encode_message(struct ipfix_message *message,
 static int ipfix_export_send_message(struct ipfix_exporter *e,
                                      struct ipfix_message *message) {
   ssize_t bytes = 0;
+  size_t msg_len = message->hdr.length;
 
   memset(&raw_message, 0, sizeof(struct ipfix_raw_message));
 
@@ -3958,7 +3974,7 @@ static int ipfix_export_send_message(struct ipfix_exporter *e,
   memcpy(&raw_message.hdr, &message->hdr, sizeof(struct ipfix_hdr));
 
   /* Send the message */
-  bytes = sendto(e->socket, (const char*)&raw_message, raw_message.hdr.length, 0,
+  bytes = sendto(e->socket, (const char*)&raw_message, msg_len, 0,
                  (struct sockaddr *)&e->clctr_addr,
                  sizeof(e->clctr_addr));
 
