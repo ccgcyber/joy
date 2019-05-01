@@ -1,6 +1,6 @@
 /*
  *      
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2018 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -47,12 +47,12 @@
  \endverbatim
  */
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <unistd.h>  
 #include "anon.h"
 #include "radix_trie.h"
+#include "safe_lib.h"
 
 #ifdef WIN32
 #include <Ws2tcpip.h>
@@ -62,13 +62,13 @@
 #include <netinet/in.h>
 #endif
 
-
+static char anon_buffer[IPV4_ANON_LEN];
 
 static char *addr_string_anonymize (char *addr_string) {
     struct in_addr addr;
     int l;
 
-    l = strnlen(addr_string, 256);
+    l = strnlen_s(addr_string, 256);
     if (l >= 32) {
         return addr_string;  /* probably already anonymized */
     }
@@ -80,7 +80,8 @@ static char *addr_string_anonymize (char *addr_string) {
 #endif
         return NULL;
     }
-    return addr_get_anon_hexstring(&addr);
+    addr_get_anon_hexstring(&addr, (char*)anon_buffer, IPV4_ANON_LEN);
+    return anon_buffer;
 }
 
 
@@ -88,7 +89,7 @@ char string[17];
 static char *addr_string_deanonymize (const char *hexstring) {
     int l;
 
-    l = strnlen(hexstring, 256);
+    l = strnlen_s(hexstring, 256);
     if (l != 32) {
         return NULL;  /* can't be anonymized value */
     }
@@ -119,14 +120,6 @@ enum type {
     strings   = 2
 };
 
-#if 0
-/*
- * getopt() external variables
- */
-extern char *optarg;
-extern int optind, opterr, optopt;
-#endif
-
 /**
  \fn int main (int argc, char *argv[])
  \brief main entry point for joy-anon
@@ -137,7 +130,7 @@ extern int optind, opterr, optopt;
  \return 0 success
  */
 int main (int argc, char *argv[]) {
-    char *keyfile = ANON_KEYFILE_DEFAULT;
+    const char *keyfile = ANON_KEYFILE_DEFAULT;
     enum anon_mode mode = mode_anonymize;
     enum type type = addresses;    /* we don't handle userids for now */
     int i, opt;

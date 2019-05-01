@@ -40,10 +40,10 @@
  *
  */
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/types.h>
+#include "safe_lib.h"
 
 #ifdef WIN32
 #include "Ws2tcpip.h"
@@ -339,14 +339,16 @@ static int nfv9_process_flow_time_milli(const void *flow_data,
 void nfv9_flow_key_init (flow_key_t *key, 
       const struct nfv9_template *cur_template, const char *flow_data) {
     int i;
+
+    memset_s(key, sizeof(flow_key_t), 0x00, sizeof(flow_key_t));
     for (i = 0; i < cur_template->hdr.FieldCount; i++) {
         switch (htons(cur_template->fields[i].FieldType)) {
             case IPV4_SRC_ADDR:
-                key->sa.s_addr = *(const int *)flow_data;
+                key->sa.v4_sa.s_addr = *(const int *)flow_data;
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case IPV4_DST_ADDR:
-                key->da.s_addr = *(const int *)flow_data;
+                key->da.v4_da.s_addr = *(const int *)flow_data;
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case L4_SRC_PORT:
@@ -381,13 +383,13 @@ static int nfv9_skip_idp_header(flow_record_t *nf_record,
                           const unsigned char **payload,
                           unsigned int *size_payload) {
     unsigned char proto = 0;
-    const struct ip_hdr *ip = NULL;
+    const ip_hdr_t *ip = NULL;
     unsigned int ip_hdr_len;
     const unsigned char *flow_data = nf_record->idp;
     unsigned int flow_len = nf_record->idp_len;
 
     /* Compute ip header offset */
-    ip = (struct ip_hdr*)(flow_data);
+    ip = (const ip_hdr_t*)(flow_data);
     ip_hdr_len = ip_hdr_length(ip);
     if (ip_hdr_len < 20) {
         /*
@@ -397,7 +399,7 @@ static int nfv9_skip_idp_header(flow_record_t *nf_record,
         return 1;
     }
 
-    if (ntohs(ip->ip_len) < sizeof(struct ip_hdr)) {
+    if (ntohs(ip->ip_len) < sizeof(ip_hdr_t)) {
         /* IP packet is malformed (shorter than a complete IP header) */
         joy_log_warn("ip packet malformed, ip_len: %d", ntohs(ip->ip_len));
         return 1;
@@ -413,7 +415,7 @@ static int nfv9_skip_idp_header(flow_record_t *nf_record,
              return 1;
         }
         /* Compute icmp payload (segment) offset */
-        *payload = (unsigned char *)(flow_data + ip_hdr_len + icmp_hdr_len);
+        *payload = (const unsigned char *)(flow_data + ip_hdr_len + icmp_hdr_len);
 
         /* Compute icmp payload (segment) size */
         *size_payload = flow_len - ip_hdr_len - icmp_hdr_len;
@@ -428,7 +430,7 @@ static int nfv9_skip_idp_header(flow_record_t *nf_record,
         }
 
         /* Compute tcp payload (segment) offset */
-        *payload = (unsigned char *)(flow_data + ip_hdr_len + tcp_hdr_len);
+        *payload = (const unsigned char *)(flow_data + ip_hdr_len + tcp_hdr_len);
 
         /* Compute tcp payload (segment) size */
         *size_payload = flow_len - ip_hdr_len - tcp_hdr_len;
@@ -436,7 +438,7 @@ static int nfv9_skip_idp_header(flow_record_t *nf_record,
         unsigned int udp_hdr_len = 8;
 
         /* Compute udp payload (segment) offset */
-        *payload = (unsigned char *)(flow_data + ip_hdr_len + udp_hdr_len);
+        *payload = (const unsigned char *)(flow_data + ip_hdr_len + udp_hdr_len);
 
         /* Compute udp payload (segment) size */
         *size_payload = flow_len - ip_hdr_len - udp_hdr_len;
@@ -472,7 +474,7 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
     int field_length = 0;
     int bytes_per_val = 0;
 
-    memset(&old_val_time, 0x0, sizeof(struct timeval));
+    memset_s(&old_val_time, sizeof(struct timeval), 0x0, sizeof(struct timeval));
 
     for (i = 0; i < cur_template->hdr.FieldCount; i++) {
 
@@ -520,6 +522,20 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_SRLT:
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
                 total_ms = 0;
                 for (j = 0; j < 20; j++) {
                     if (htons(*(const short *)(flow_data+j*2)) == 0) {
@@ -540,6 +556,20 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_CS:
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
                 for (j = 0; j < 125; j++) {
                     if (htons(*(const short *)(flow_data+j*2)) == 65535) {
                         break;
@@ -551,6 +581,20 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_EXT:
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
                 for (j = 0; j < 35; j++) {
                     if (htons(*(const short *)(flow_data+j*2)) == 0) {
                         break;
@@ -564,21 +608,77 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_VERSION:
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
                 nf_record->tls->version = *(const char *)flow_data;
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_CLIENT_KEY_LENGTH:
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
                 nf_record->tls->client_key_length = htons(*(const short *)flow_data);
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_SESSION_ID:
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
                 nf_record->tls->sid_len = htons(*(const short *)flow_data);
                 nf_record->tls->sid_len = min(nf_record->tls->sid_len,256);
-                memcpy(nf_record->tls->sid, flow_data+2, nf_record->tls->sid_len);
+                memcpy_s(nf_record->tls->sid, nf_record->tls->sid_len, flow_data+2, nf_record->tls->sid_len);
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case TLS_HELLO_RANDOM:
-                memcpy(nf_record->tls->random, flow_data, 32);
+                /* if TLS structure is NULL get one */
+                if (nf_record->tls == NULL) {
+                    tls_init(&nf_record->tls);
+                    /* if still NULL bail on this processing */
+                    if (nf_record->tls == NULL) {
+                        flow_data += htons(cur_template->fields[i].FieldLength);
+                        break;
+                    }
+                }
+
+                /* specify role as flow data if necessary */
+                if (nf_record->tls->role == role_unknown) {
+                    nf_record->tls->role = role_flow_data;
+                }
+                memcpy_s(nf_record->tls->random, 32, flow_data, 32);
                 flow_data += htons(cur_template->fields[i].FieldLength);
                 break;
             case IDP: 
@@ -591,7 +691,7 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
                     return;
                 }
 
-                memcpy(nf_record->idp, flow_data, nf_record->idp_len);
+                memcpy_s(nf_record->idp, nf_record->idp_len, flow_data, nf_record->idp_len);
                 
 
                 /* Get the start of IDP packet payload */
@@ -661,535 +761,3 @@ void nfv9_process_flow_record (flow_record_t *nf_record,
     }
 }
 
-/**********************************************
- * All of this code seems to  old or not used *
- **********************************************/
-
-#if 0
-
-#define TEMPLATE 0
-#define NFV9_PORT 2055
-
-/*
- * SOURCE_ID is hardcoded now for simplicity
- */
-#define SOURCE_ID 1
-
-#define nfv9_template_field(a) ((struct nfv9_template_field) {a, 0})
-#define nfv9_template_field_len(a,b) ((struct nfv9_template_field) {a, b})
-
-struct nfv9_salt_flow_record {
-    u_char salt;  /* placeholder */
-};
-
-struct template_handler *template_handler_list = NULL;
-unsigned int template_id_max = 256;
-
-static struct nfv9_field_type *get_nfv9_field_type (u_short typecode) {
-    if (typecode > MAX_TYPES) {
-        typecode = 0;
-    }
-    return &nfv9_fields[typecode];
-}
-
-static struct template_handler *get_template_handler(unsigned int template_id);
-
-static void nfv9_hdr_init (struct nfv9_hdr *h) {
-    h->VersionNumber = htons(9);
-}
-
-static void nfv9_template_flowset_init (struct nfv9_template_flowset *fs) {
-    fs->flowset_hdr.FlowSetID = TEMPLATE;
-    fs->flowset_hdr.Length = 0;
-}
-
-static void nfv9_template_flowset_decode_init (struct nfv9_template_flowset *fs) {
-    //  fs->flowset_hdr.Length;
-}
-
-void encode_unsigned(const void *uint, unsigned int len, void *output) {
-  switch(len) {
-    case 1:
-      ((u_char *)output)[0] = ((u_char *)uint)[0];
-      break;
-    case 2:
-      ((u_short *)output)[0] = htons(((u_short *)uint)[0]);
-      break;
-    case 4:
-      ((u_int *)output)[0] = htonl(((u_int *)uint)[0]);
-      break;
-    default:
-      fprintf(stderr, "error - integer too large in encoding\n");
-  }
-}
-
-void decode_unsigned(const void *uint, unsigned int len, void *output) {
-  switch(len) {
-    case 1:
-      ((u_char *)output)[0] = ((u_char *)uint)[0];
-      break;
-    case 2:
-      ((u_short *)output)[0] = ntohs(((u_short *)uint)[0]);
-      break;
-    case 4:
-      ((u_int *)output)[0] = ntohl(((u_int *)uint)[0]);
-      break;
-    default:
-      fprintf(stderr, "error - integer too large in decoding\n");
-  }
-}
-
-void print_unsigned(const void *uint, unsigned int len) {
-  switch(len) {
-    case 1:
-      printf("%u\n", ((u_char *)uint)[0]);
-      break;
-    case 2:
-      printf("%u\n", ((u_short *)uint)[0]);
-      break;
-    case 4:
-      printf("%u\n", ((u_int *)uint)[0]);
-      break;
-    default:
-      fprintf(stderr, "error - bad integer size in print_unsigned \n");
-  }
-}
-
-static void nfv9_template_flowset_add_field (struct nfv9_template_flowset *fs,
-                                     struct nfv9_template_field f) {
-    /* unsigned int index; */
-
-    /* index = (fs->flowset_hdr.Length - sizeof(struct nfv9_flowset_hdr)); */
-    /* index = index / (sizeof(struct nfv9_template_field)) + 1; */
-
-    /* fs->fields[index] = f; */
-}
-
-static void nfv9_exporter_init (struct nfv9_exporter *e, const char *hostname) {
-    struct hostent *host;
-    /* set collector address */
-
-    e->msg_count = 0;
-    e->sysUpTime = time(NULL);
-
-    e->socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (e->socket < 0) {
-        perror("cannot create socket");
-    }
-
-    /* set local (exporter) address */
-    memset((char *)&e->exprt_addr, 0, sizeof(e->exprt_addr));
-    e->exprt_addr.sin_family = AF_INET;
-    e->exprt_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    e->exprt_addr.sin_port = htons(0); /* ANY */
-    if (bind(e->socket,
-               (struct sockaddr *)&e->exprt_addr,
-               sizeof(e->exprt_addr)) < 0) {
-        perror("bind failed");
-    }
-
-    /* set remote (collector) address */
-    memset((char*)&e->clctr_addr, 0, sizeof(e->clctr_addr));
-    e->clctr_addr.sin_family = AF_INET;
-    e->clctr_addr.sin_port = htons(NFV9_PORT);
-    host = gethostbyname(hostname);
-    if (!host) {
-        fprintf(stderr, "could not find address for collector %s\n", hostname);
-    }
-
-    memcpy((void *)&e->clctr_addr.sin_addr, host->h_addr_list[0], host->h_length);
-
-    return;
-}
-
-static void nfv9_exporter_send_msg (struct nfv9_exporter *e, struct nfv9_msg *msg) {
-    /* send a message to the server */
-    ssize_t bytes;
-
-
-    msg->hdr.Count = 0;  /* number of flowsets */
-
-    msg->hdr.VersionNumber = htons(9);
-    msg->hdr.sysUpTime = e->sysUpTime;
-    msg->hdr.UNIXSecs = time(NULL);
-    msg->hdr.SequenceNumber = htonl(e->msg_count);
-    msg->hdr.SourceID = htonl(SOURCE_ID);
-
-    bytes = sendto(e->socket, msg, 0, 0, (struct sockaddr *)&e->clctr_addr,
-                             sizeof(e->clctr_addr));
-    if (bytes < 0) {
-        perror("nfv9 message could not be sent");
-    }
-}
-
-static void nfv9_template_init (struct nfv9_template *t, u_short TemplateID) {
-    t->hdr.TemplateID = TemplateID;
-    t->hdr.FieldCount = 0;
-}
-
-static void nfv9_template_add_field (struct nfv9_template *t, struct nfv9_template_field f) {
-    t->fields[t->hdr.FieldCount] = f;
-    t->hdr.FieldCount++;
-}
-
-static void encode_unsigned (const void *uint, unsigned int len, void *output) {
-    switch(len) {
-        case 1:
-            ((u_char *)output)[0] = ((u_char *)uint)[0];
-            break;
-        case 2:
-            ((u_short *)output)[0] = htons(((u_short *)uint)[0]);
-            break;
-        case 4:
-            ((u_int *)output)[0] = htonl(((u_int *)uint)[0]);
-            break;
-        default:
-            fprintf(stderr, "error - integer too large in encoding\n");
-    }
-}
-
-static void decode_unsigned (const void *uint, unsigned int len, void *output) {
-    switch(len) {
-        case 1:
-            ((u_char *)output)[0] = ((u_char *)uint)[0];
-            break;
-        case 2:
-            ((u_short *)output)[0] = ntohs(((u_short *)uint)[0]);
-            break;
-        case 4:
-            ((u_int *)output)[0] = ntohl(((u_int *)uint)[0]);
-            break;
-        default:
-            fprintf(stderr, "error - integer too large in decoding\n");
-    }
-}
-
-static void print_unsigned(const void *uint, unsigned int len) {
-    switch(len) {
-        case 1:
-            printf("%u\n", ((u_char *)uint)[0]);
-            break;
-        case 2:
-            printf("%u\n", ((u_short *)uint)[0]);
-            break;
-        case 4:
-            printf("%u\n", ((u_int *)uint)[0]);
-            break;
-        default:
-            fprintf(stderr, "error - bad integer size in print_unsigned \n");
-    }
-}
-
-static int nfv9_flow_record_encode(const void *record,
-                            const struct nfv9_template *template,
-                            void *output,
-                            unsigned int output_len) {
-    unsigned int total_length = 0, element_length, i, num_elements;
-
-    num_elements = template->hdr.FieldCount;
-    if (num_elements > NFV9_MAX_ELEMENTS) {
-        fprintf(stderr, "error: too many elements in record\n");
-    }
-
-    /* encode each information element */
-    for (i=0; i<num_elements; i++) {
-        element_length = template->fields[i].FieldLength;
-        total_length += element_length;
-        if (total_length > output_len) {
-            return -total_length; /* error */
-        }
-        encode_unsigned(record, element_length, output);
-        record += element_length;
-        output += element_length;
-    }
-    return total_length;
-}
-
-static int nfv9_flow_record_decode(const void *input,
-                            const struct nfv9_template *template,
-                            void *record,  /* output */
-                            unsigned int output_len) {
-    unsigned int total_length = 0, element_length, i, num_elements;
-
-    num_elements = template->hdr.FieldCount;
-    if (num_elements > NFV9_MAX_ELEMENTS) {
-        fprintf(stderr, "error: too many elements in record\n");
-    }
-
-    /* decode each information element */
-    for (i=0; i<num_elements; i++) {
-        element_length = template->fields[i].FieldLength;
-        total_length += element_length;
-        if (total_length > output_len) {
-            return -total_length; /* error */
-        }
-        decode_unsigned(input, element_length, record);
-        input += element_length;
-        record += element_length;
-    }
-    return total_length;
-}
-
-static void nfv9_data_flowset_encode_init(struct nfv9_data_flowset *fs,
-                                   const struct nfv9_template *t) {
-    fs->flowset_hdr.FlowSetID = htons(t->hdr.TemplateID);
-    fs->flowset_hdr.Length = 4; /* length so far is just header */
-}
-
-static void nfv9_data_flowset_encode_record(struct nfv9_data_flowset *fs,
-                                     const void *record,
-                                     const struct nfv9_template *template) {
-    void *writehere = fs->flowset + (fs->flowset_hdr.Length - 4);
-    unsigned int len = NFV9_MAX_LEN - fs->flowset_hdr.Length;
-    int bytes_encoded;
-
-    bytes_encoded = nfv9_flow_record_encode(record, template, writehere, len);
-    if ( bytes_encoded < 0) {
-        fprintf(stderr, "encoding error\n");
-    };
-
-    fs->flowset_hdr.Length += bytes_encoded;
-}
-
-static void nfv9_data_flowset_encode_final(struct nfv9_data_flowset *fs) {
-
-    /* add padding if needed */
-
-    /* convert header to network byte order */
-    fs->flowset_hdr.Length = htons(fs->flowset_hdr.Length);
-
-}
-
-static void nfv9_flow_record_print(const void *record,
-                            const struct nfv9_template *template) {
-    unsigned int element_length, i, num_elements;
-
-    num_elements = template->hdr.FieldCount;
-    if (num_elements > NFV9_MAX_ELEMENTS) {
-        fprintf(stderr, "error: too many elements in record\n");
-    }
-
-    /* print each information element */
-    for (i=0; i<num_elements; i++) {
-        element_length = template->fields[i].FieldLength;
-        printf("%s: ",
-                 get_nfv9_field_type(template->fields[i].FieldType)->FieldName);
-        print_unsigned(record, element_length);
-        record += element_length;
-    }
-}
-
-static void nfv9_data_flowset_decode_and_handle (struct nfv9_data_flowset *fs) {
-    unsigned int template_id;
-    int len_remaining, ret;
-    struct template_handler *h;
-    void *readhere = fs->flowset;
-    u_char buffer[NFV9_MAX_LEN];
-
-    /* decode header */
-    template_id = ntohs(fs->flowset_hdr.FlowSetID);
-    len_remaining = ntohs(fs->flowset_hdr.Length) - 4;
-
-    /* get appropriate handler for template */
-    h = get_template_handler(template_id);
-    if (h == NULL) {
-        printf("no handler found for this template (%u)\n", template_id);
-        return; /* can't do anything with this flowset */
-    }
-
-    /* loop over all records in flowset */
-    while (len_remaining > 0) {
-        printf("\nprocessing flow record:\n");
-        ret = nfv9_flow_record_decode(readhere, &h->template, buffer, NFV9_MAX_LEN);
-        printf("got %d bytes\n", ret);
-        if (ret < 1) {
-            break;
-        }
-        nfv9_flow_record_print(buffer, &h->template);
-        readhere += ret;
-        len_remaining -= ret;
-        printf("remaining length: %d\n", len_remaining);
-    }
-}
-
-static void nfv9_template_print (const struct nfv9_template *template) {
-    unsigned int field_length, field_type, num_elements, i;
-
-    printf("TemplateID: %u\n", template->hdr.TemplateID);
-    printf("FieldCount: %u\n", template->hdr.FieldCount);
-
-    num_elements = template->hdr.FieldCount;
-    if (num_elements > NFV9_MAX_ELEMENTS) {
-        fprintf(stderr, "error: too many elements in template\n");
-    }
-
-    /* print each field */
-    for (i=0; i<num_elements; i++) {
-        field_length = template->fields[i].FieldLength;
-        field_type = template->fields[i].FieldType;
-        printf("%s: \tlength: %u\n",
-             get_nfv9_field_type(field_type)->FieldName,
-             field_length);
-    }
-}
-
-static void nfv9_template_flowset_encode_init (struct nfv9_template_flowset *fs) {
-    fs->flowset_hdr.FlowSetID = TEMPLATE;
-    fs->flowset_hdr.Length = 4; /* length so far is just header */
-}
-
-static void nfv9_template_flowset_encode_template (struct nfv9_template_flowset *fs,
-                           const struct nfv9_template *template) {
-    void *writehere = fs->flowset + (fs->flowset_hdr.Length - 4);
-    unsigned int len = NFV9_MAX_LEN - fs->flowset_hdr.Length;
-    unsigned int i, num_elements, total_length = 0;
-
-    num_elements = template->hdr.FieldCount;
-    if (num_elements > NFV9_MAX_ELEMENTS) {
-        fprintf(stderr, "error: too many elements in template flowset\n");
-    }
-
-    /* encode template header */
-    encode_unsigned(&template->hdr.TemplateID, 2, writehere);
-    writehere += 2;
-    encode_unsigned(&template->hdr.FieldCount, 2, writehere);
-    writehere += 2;
-
-    /* encode each field in template */
-    for (i=0; i<num_elements; i++) {
-        total_length += 2;
-        if (total_length > len) {
-            fprintf(stderr, "error: not enough room in template flowset\n");
-        }
-        encode_unsigned(&template->fields[i].FieldType, 2, writehere);
-        writehere += 2;
-        encode_unsigned(&template->fields[i].FieldLength, 2, writehere);
-        writehere += 2;
-    }
-
-    fs->flowset_hdr.Length += total_length;
-}
-
-static void nfv9_template_flowset_encode_final (struct nfv9_template_flowset *fs) {
-    /* add padding if needed */
-
-    /* convert header to network byte order */
-    fs->flowset_hdr.Length = htons(fs->flowset_hdr.Length);
-}
-
-static void nfv9_template_decode (const void *input,
-        struct nfv9_template *template, unsigned int template_len) {
-    unsigned int num_elements, total_length, i;
-    const struct nfv9_template *input_template = input;
-
-    template->hdr.TemplateID = ntohs(input_template->hdr.TemplateID);
-    num_elements = ntohs(input_template->hdr.FieldCount);
-    if (num_elements > NFV9_MAX_ELEMENTS) {
-        fprintf(stderr, "error: too many elements in template flowset\n");
-    }
-    template->hdr.FieldCount = num_elements;
-    total_length = 4;
-
-    /* decode each field in template */
-    for (i=0; i<num_elements; i++) {
-        total_length += 4;
-        if (total_length > template_len) {
-            fprintf(stderr, "error: not enough room in template decode\n");
-        }
-        template->fields[i].FieldType =
-            ntohs(input_template->fields[i].FieldType);
-        template->fields[i].FieldLength =
-            ntohs(input_template->fields[i].FieldLength);
-    }
-}
-
-static void template () {
-    struct nfv9_template t;
-
-    /*
-       NFv9 template for conventional 5-tuple
-
-       { "OUT_BYTES",                    23,   0  },
-       { "OUT_PKTS",                     24,   0  },
-       { "IPV4_SRC_ADDR",                 8,   4  }
-       { "IPV4_DST_ADDR",                12,   4  },
-       { "L4_SRC_PORT",                   7,   2  },
-       { "L4_DST_PORT",                  11,   2  },
-       { "PROTOCOL",                      4,   1  },
-
-     */
-    nfv9_template_init(&t, 1);
-    nfv9_template_add_field(&t, nfv9_template_field(23));
-    nfv9_template_add_field(&t, nfv9_template_field(24));
-    nfv9_template_add_field(&t, nfv9_template_field(8));
-    nfv9_template_add_field(&t, nfv9_template_field(12));
-    nfv9_template_add_field(&t, nfv9_template_field(7));
-    nfv9_template_add_field(&t, nfv9_template_field(11));
-    nfv9_template_add_field(&t, nfv9_template_field(4));
-}
-
-static unsigned int
-nfv9_register_template_handler (const struct nfv9_template *template,
-                                    template_handler_func f) {
-    struct template_handler *h = malloc(sizeof(struct template_handler));
-
-    if (h == NULL) {
-        printf("error: could not allocate handler\n");
-        return 0;
-    }
-    h->template_id = template_id_max++;   /* note: should check for wrap */
-    h->func = f;
-    memcpy(&h->template, template, sizeof(struct nfv9_template));
-    h->next = template_handler_list;
-    template_handler_list = h;
-
-    return h->template_id;
-}
-
-static void nfv9_unregister_template_handler (unsigned int template_id) {
-    ; /* remove list entry */
-}
-
-static struct template_handler *get_template_handler (unsigned int template_id) {
-    struct template_handler *h;
-
-    /* find handler */
-    h = template_handler_list;
-    while (h != NULL) {
-        if ((h->template_id == template_id) || (h->template_id == 0)) {
-            return h;
-        }
-        h = h->next;
-    }
-    fprintf(stderr, "error: could not find handler\n");
-    return NULL;
-}
-
-void handle_data (unsigned int template_id,
-              void *data, unsigned int len) {
-    struct template_handler *h;
-
-    /* find handler */
-    h = template_handler_list;
-    while (h != NULL) {
-        if ((h->template_id == template_id) || (h->template_id == 0)) {
-            return h->func(data, len);
-        }
-        h = h->next;
-    }
-    fprintf(stderr, "error: could not find handler\n");
-}
-
-static void nfv9_exporter_init_msg (struct nfv9_exporter *e,
-                         struct nfv9_msg *msg) {
-
-    msg->hdr.VersionNumber = htons(9);
-    msg->hdr.sysUpTime = e->sysUpTime;
-    msg->hdr.UNIXSecs = time(NULL);
-    msg->hdr.SequenceNumber = htonl(e->msg_count);
-    msg->hdr.SourceID = htonl(SOURCE_ID);
-
-    msg->hdr.Count = 0;  /* number of flowsets */
-}
-
-#endif

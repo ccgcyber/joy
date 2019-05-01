@@ -1,6 +1,6 @@
 /*
  *      
- * Copyright (c) 2016-2018 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -78,14 +78,13 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <ctype.h>
 #include "radix_trie.h"
 #include "addr.h"
 #include "config.h"
 #include "output.h"
 #include "updater.h"
-
+#include "safe_lib.h"
 #ifdef WIN32
 #include "Ws2tcpip.h"
 
@@ -146,12 +145,27 @@ pthread_mutex_t radix_trie_lock = PTHREAD_MUTEX_INITIALIZER;
  */
 static __inline void *rt_malloc (size_t s) {
     void *p = NULL;
-    p = calloc(1, s);
+    p = malloc(s);
     if (p != NULL) {
         debug_printf("rt_malloc[0x%x] of %zu bytes\n", (unsigned int)p, s);
     }
     return (p);
 }
+
+/* 
+ * radix trie memory allocation function
+ * returns pointer to memory allocated
+ * returns NULL on failure
+ */
+static __inline void *rt_calloc (size_t s) {
+    void *p = NULL;
+    p = calloc(1, s);
+    if (p != NULL) {
+        debug_printf("rt_calloc[0x%x] of %zu bytes\n", (unsigned int)p, s);
+    }
+    return (p);
+}
+
 
 /* 
  * radix trie memory free function
@@ -179,15 +193,12 @@ struct radix_trie *radix_trie_alloc () {
  * returns radix_trie_node pointer
  * returns NULL on failure
  */
-static struct radix_trie_node *radix_trie_node_init () {
+static struct radix_trie_node *radix_trie_node_init (void) {
     struct radix_trie_node *rt_node = NULL;
   
-    rt_node = rt_malloc(sizeof(struct radix_trie_node));
+    rt_node = rt_calloc(sizeof(struct radix_trie_node));
     if (rt_node != NULL) {
         rt_node->type = internal;
-
-        /* initialize table entries to NULL */
-        memset(rt_node->table, 0, sizeof(rt_node->table));
     }
 
     return rt_node;  /* could be NULL */
@@ -239,9 +250,9 @@ attr_flags radix_trie_lookup_addr (struct radix_trie *trie, struct in_addr addr)
         }
     }  
     if (rt->type == leaf) {
-        struct radix_trie_leaf *leaf = (struct radix_trie_leaf *)rt;
-        debug_printf("%s:found leaf (value: %x)\n", __FUNCTION__, leaf->value);
-        rc_flags = leaf->value;
+        struct radix_trie_leaf *lleaf = (struct radix_trie_leaf *)rt;
+        debug_printf("%s:found leaf (value: %x)\n", __FUNCTION__, lleaf->value);
+        rc_flags = lleaf->value;
         return rc_flags; /* indicate success by returning flags  */
     }
 
@@ -251,7 +262,7 @@ attr_flags radix_trie_lookup_addr (struct radix_trie *trie, struct in_addr addr)
 /*
  * fucntion add flags to all leaf nodes 
  */
-static void radix_trie_node_add_flag_to_all_leaves (const struct radix_trie_node *rt, attr_flags flags) {
+static void radix_trie_node_add_flag_to_all_leaves (struct radix_trie_node *rt, attr_flags flags) {
     unsigned int i = 0;
   
     /* sanity check */
@@ -273,6 +284,7 @@ static void radix_trie_node_add_flag_to_all_leaves (const struct radix_trie_node
                 radix_trie_node_add_flag_to_all_leaves(rt->table[i], flags);
             }
             break;
+        case reservd:
         default:
             break;
     }
@@ -423,7 +435,7 @@ attr_flags radix_trie_add_attr_label (struct radix_trie *rt, const char *attr_la
     }
 
     /* ensure label will fit into the trie */
-    if (strlen(attr_label) > MAX_LABEL_LEN-1) { 
+    if (strnlen_s(attr_label, MAX_LABEL_LEN) > MAX_LABEL_LEN-1) { 
         return 0;     /* not enough room for label and null terminator */
     }
 
@@ -470,7 +482,7 @@ static void attr_flags_print_labels (const struct radix_trie *rt, attr_flags f) 
  * \param zfile file pointer of where to send output
  * \return none
  */
-void attr_flags_json_print_labels (const struct radix_trie *rt, attr_flags f, char *prefix, zfile file) {
+void attr_flags_json_print_labels (const struct radix_trie *rt, attr_flags f, const char *prefix, zfile file) {
     unsigned int i, c = 0;
 
     /* sanity check */
@@ -502,7 +514,7 @@ joy_status_e radix_trie_init (struct radix_trie *rt) {
     if (rt != NULL) {
         rt->root = radix_trie_node_init();
         rt->num_flags = 0;
-        memset(rt->flag, 0, sizeof(rt->flag));
+        memset_s(rt->flag, sizeof(rt->flag), 0, sizeof(rt->flag));
         pthread_mutex_unlock(&radix_trie_lock);
         return ok;
     } else {
@@ -515,7 +527,7 @@ joy_status_e radix_trie_init (struct radix_trie *rt) {
  * Function to free up the memory for leaf and internal nodes
  * returns ok
  */
-static joy_status_e radix_trie_deep_free (const struct radix_trie_node *rt) {
+static joy_status_e radix_trie_deep_free (struct radix_trie_node *rt) {
     int i = 0;
 
     switch (rt->type) {
@@ -533,6 +545,7 @@ static joy_status_e radix_trie_deep_free (const struct radix_trie_node *rt) {
            /* now free the internal node */
            rt_free((void*)rt);
            break;
+        case reservd:
         default:
            break;
     }
@@ -545,7 +558,7 @@ static joy_status_e radix_trie_deep_free (const struct radix_trie_node *rt) {
  * \return ok
  */
 joy_status_e radix_trie_free (struct radix_trie *r) {
-    int i = 0;
+    unsigned int i = 0;
 
     /* sanity check the trie */
     if (r == NULL) {
@@ -702,7 +715,8 @@ joy_status_e radix_trie_add_subnets_from_file (struct radix_trie *rt,
  * function to print out the contents of a node
  */
 static void radix_trie_node_print (const struct radix_trie *r, 
-                                   const struct radix_trie_node *rt, char *string) {
+                                   struct radix_trie_node *rt,
+                                   const char *string) {
     uint32_t i = 0;
     char tmp[TMP_BUFF_256_LEN];
     char *ptr = NULL;
@@ -716,23 +730,14 @@ static void radix_trie_node_print (const struct radix_trie *r,
     /*
      * Verify the string isn't too long
      */
-    len = strnlen(string, TMP_BUFF_256_LEN);
+    len = strnlen_s(string, TMP_BUFF_256_LEN);
     if (len >= TMP_BUFF_256_LEN) {
 	return;
     }
 
 
-#if 0
-    // Wow this code is totally unsafe
-    strcpy(tmp, string);
-    ptr = index(tmp, 0);
-    *ptr++ = ' ';
-    *ptr++ = ' ';
-    *ptr++ = ' ';
-    *ptr = 0;
-#endif
     //safe copy of string into tmp buffer
-    strncpy(tmp, string, TMP_BUFF_256_LEN-1);
+    strncpy_s(tmp, TMP_BUFF_256_LEN, string, len);
     tmp[TMP_BUFF_256_LEN-1] = '\0'; // make sure string is terminated
     //replacement for index function
     for (i = 0; i < TMP_BUFF_256_LEN; ++i) {
@@ -765,6 +770,7 @@ static void radix_trie_node_print (const struct radix_trie *r,
                 }
             }
             break;
+        case reservd:
         default:
             break;
     }
@@ -783,10 +789,14 @@ static void radix_trie_print (const struct radix_trie *rt) {
  * returns 0 on success
  * returns 1 on failure
  */
-static int radix_trie_high_level_unit_test () {
+static int radix_trie_high_level_unit_test (void) {
     struct radix_trie *rt = NULL;
     attr_flags flag_internal, flag_malware, flag;
-    char *configfile = "internal.net";
+#ifdef HAVE_CONFIG_H
+    const char *configfile = "internal.net";
+#else
+    const char *configfile = "../internal.net";
+#endif
     struct in_addr addr;
     joy_status_e err;
     unsigned test_failed = 0;

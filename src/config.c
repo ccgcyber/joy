@@ -1,6 +1,6 @@
 /*
  *      
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -40,10 +40,12 @@
  * \brief implementation for the configuration system
  *
  */
+#ifdef HAVE_CONFIG_H
+#include "joy_config.h"
+#endif
 #include <stdlib.h>       
 #include <limits.h>
 #include <ctype.h> 
-#include <string.h> 
 #include "err.h"
 #include "anon.h"
 #include "config.h"
@@ -62,7 +64,7 @@ size_t getline(char **lineptr, size_t *n, FILE *stream);
 #define match(c, x) (!strncmp(c, x, strlen(x)))
 
 /* parses an integer value */
-static int parse_int (unsigned int *x, const char *arg, int num_arg, int min, int max) {
+static int parse_int (unsigned int *x, const char *arg, int num_arg, unsigned int min, unsigned int max) {
     const char *c = arg;
 
     if (x == NULL) {
@@ -92,12 +94,37 @@ static int parse_int (unsigned int *x, const char *arg, int num_arg, int min, in
 }
 
 /* parses a boolean value */
-static int parse_bool (unsigned int *x, const char *arg, int num_arg) {
+static int parse_bool (bool *x, const char *arg, int num_arg) {
+    bool val = 0;
+
+    /* if the number of arguments is one, default turn the option on */
     if (num_arg == 1) {
-        arg = "1";
-        num_arg = 2;
+        *x = 1;
+        return ok;
     }
-    return parse_int(x, arg, num_arg, 0, 1);
+
+    /* sanity check the length of the value string */
+    if (strlen(arg) > 1) {
+        printf("error: value too big, value must be 0 or 1");
+        return failure;
+    }
+
+    /* make sure value is a digit */
+    if (!isdigit(*arg)) {
+        printf("error: non-digit, value must be 0 or 1");
+        return failure;
+    }
+
+    /* change the value into a digit */
+    val = atoi(arg);
+
+    /* if value is not 1, turn off option */
+    if (val == 1) {
+        *x = 1;
+    } else {
+        *x = 0;
+    }
+    return ok;
 }
 
 /*parses a string values */
@@ -115,7 +142,7 @@ static int parse_string (char **s, char *arg, int num_arg) {
 }
 
 /* parses mutliple part string values */
-static int parse_string_multiple (char **s, char *arg, int num_arg, 
+static int parse_string_multiple (char **s, char *arg, int num_arg,
            unsigned int string_num, unsigned int string_num_max) {
     if (s == NULL) {
         return failure;
@@ -136,7 +163,7 @@ static int parse_string_multiple (char **s, char *arg, int num_arg,
 
 
 /* parse commands */
-static int config_parse_command (struct configuration *config, 
+static int config_parse_command (configuration_t *config,
                          const char *command, char *arg, int num) {  
     char *tmp;
   
@@ -178,12 +205,6 @@ static int config_parse_command (struct configuration *config,
     } else if (match(command, "keyfile")) {
         parse_check(parse_string(&config->upload_key, arg, num));
 
-    } else if (match(command, "URLmodel")) {
-        parse_check(parse_string(&config->params_url, arg, num));
-
-    } else if (match(command, "URLlabel")) {
-        parse_check(parse_string(&config->label_url, arg, num));
-
     } else if (match(command, "model")) {
         parse_check(parse_string(&config->params_file, arg, num));
 
@@ -212,7 +233,7 @@ static int config_parse_command (struct configuration *config,
         parse_check(parse_bool(&config->report_entropy, arg, num));
 
     } else if (match(command, "hd")) {
-        parse_check(parse_int(&config->report_hd, arg, num, 0, HDR_DSC_LEN));
+        parse_check(parse_int((unsigned int*)&config->report_hd, arg, num, 0, HDR_DSC_LEN));
 
     } else if (match(command, "classify")) {
         parse_check(parse_bool(&config->include_classifier, arg, num));
@@ -221,40 +242,43 @@ static int config_parse_command (struct configuration *config,
         parse_check(parse_string(&config->bpf_filter_exp, arg, num));
 
     } else if (match(command, "verbosity")) {
-        parse_check(parse_int(&config->verbosity, arg, num, 0, 5));
+        parse_check(parse_int((unsigned int*)&config->verbosity, arg, num, 0, 5));
+
+    } else if (match(command, "threads")) {
+        parse_check(parse_int((unsigned int*)&config->num_threads, arg, num, 1, 5));
 
     } else if (match(command, "num_pkts")) {
-        parse_check(parse_int(&config->num_pkts, arg, num, 0, MAX_NUM_PKT_LEN));
+        parse_check(parse_int((unsigned int*)&config->num_pkts, arg, num, 0, MAX_NUM_PKT_LEN));
 
-    } else if (match(command, "type")) {
-        parse_check(parse_int(&config->type, arg, num, 1, 2));
-  
     } else if (match(command, "count")) {
         parse_check(parse_int(&config->max_records, arg, num, 1, INT_MAX));
 
     } else if (match(command, "idp")) {
-        parse_check(parse_int(&config->idp, arg, num, 0, MAX_IDP));
+        parse_check(parse_int((unsigned int*)&config->idp, arg, num, 0, MAX_IDP));
 
     } else if (match(command, "nfv9_port")) {
-        parse_check(parse_int(&config->nfv9_capture_port, arg, num, 0, 0xffff));
+        parse_check(parse_int((unsigned int*)&config->nfv9_capture_port, arg, num, 0, 0xffff));
 
     } else if (match(command, "ipfix_collect_port")) {
-        parse_check(parse_int(&config->ipfix_collect_port, arg, num, 0, 0xffff));
+        parse_check(parse_int((unsigned int*)&config->ipfix_collect_port, arg, num, 0, 0xffff));
 
     } else if (match(command, "ipfix_collect_online")) {
         parse_check(parse_bool(&config->ipfix_collect_online, arg, num));
 
     } else if (match(command, "ipfix_export_port")) {
-        parse_check(parse_int(&config->ipfix_export_port, arg, num, 0, 0xffff));
+        parse_check(parse_int((unsigned int*)&config->ipfix_export_port, arg, num, 0, 0xffff));
 
     } else if (match(command, "ipfix_export_remote_port")) {
-        parse_check(parse_int(&config->ipfix_export_remote_port, arg, num, 0, 0xffff));
+        parse_check(parse_int((unsigned int*)&config->ipfix_export_remote_port, arg, num, 0, 0xffff));
 
     } else if (match(command, "ipfix_export_remote_host")) {
         parse_check(parse_string(&config->ipfix_export_remote_host, arg, num));
 
     } else if (match(command, "ipfix_export_template")) {
         parse_check(parse_string(&config->ipfix_export_template, arg, num));
+
+    } else if (match(command, "updater")) {
+        parse_check(parse_bool(&config->updater_on, arg, num));
 
     } else if (match(command, "nat")) {
         parse_check(parse_bool(&config->flow_key_match_method, arg, num));
@@ -288,7 +312,7 @@ static int config_parse_command (struct configuration *config,
 }
 
 /**
- * \fn void config_set_defaults (struct configuration *config)
+ * \fn void config_set_defaults (configuration_t *config)
  *
  * \brief Using the global \p config struct, assign the default
  *        values for options contained within.
@@ -296,11 +320,13 @@ static int config_parse_command (struct configuration *config,
  * \param config pointer to configuration structure
  * \return none
  */
-void config_set_defaults (struct configuration *config) {
-    config->type = 1;
+void config_set_defaults (configuration_t *config) {
     config->verbosity = 4;
     config->show_config = 0;
     config->show_interfaces = 0;
+    config->num_pkts = DEFAULT_NUM_PKT_LEN;
+    config->num_threads = 1;
+    config->updater_on = 0;
 }
 
 #define MAX_FILEPATH 128
@@ -346,7 +372,7 @@ static FILE* open_config_file(const char *filename) {
 }
 
 /**
- * \fn void config_set_from_file (struct configuration *config, const char *fname)
+ * \fn void config_set_from_file (configuration_t *config, const char *fname)
  *
  * \brief Read in a .cfg file and parse the contents for option values.
  *
@@ -355,7 +381,7 @@ static FILE* open_config_file(const char *filename) {
  * \return ok
  * \return failure
  */
-int config_set_from_file (struct configuration *config, const char *fname) {
+int config_set_from_file (configuration_t *config, const char *fname) {
     FILE *f;
     char *line = NULL;
     size_t ignore;
@@ -420,7 +446,7 @@ int config_set_from_file (struct configuration *config, const char *fname) {
 }
 
 /**
- * \fn int config_set_from_argv (struct configuration *config, char *argv[], int argc)
+ * \fn int config_set_from_argv (configuration_t *config, char *argv[], int argc)
  *
  * \brief Read in from the command line and parse the args for option values.
  *
@@ -430,7 +456,7 @@ int config_set_from_file (struct configuration *config, const char *fname) {
  * \return ok
  * \return failure
  */
-int config_set_from_argv (struct configuration *config, char *argv[], int argc) {
+int config_set_from_argv (configuration_t *config, char *argv[], int argc) {
     const char *line = NULL;
     ssize_t len;
         int i;
@@ -491,15 +517,18 @@ int config_set_from_argv (struct configuration *config, char *argv[], int argc) 
 #define val(x) x ? x : NULL_KEYWORD 
 
 /**
- * \fn void config_print (FILE *f, const struct configuration *c)
+ * \fn void config_print (FILE *f, const configuration_t *c)
  * \param f file to print configuration to
  * \param c pointer to the configuration structure
  * \return none
  */
-void config_print (FILE *f, const struct configuration *c) {
+void config_print (FILE *f, const configuration_t *c) {
     unsigned int i;
-
+#ifdef PACKAGE_VERSION
+    fprintf(f, "joy version = %s\n", PACKAGE_VERSION);
+#else
     fprintf(f, "joy version = %s\n", VERSION);
+#endif
     fprintf(f, "interface = %s\n", val(c->intface));
     fprintf(f, "promisc = %u\n", c->promisc);
     fprintf(f, "output = %s\n", val(c->filename));
@@ -514,7 +543,6 @@ void config_print (FILE *f, const struct configuration *c) {
     fprintf(f, "retain = %u\n", c->retain_local);
     fprintf(f, "bidir = %u\n", c->bidir);
     fprintf(f, "num_pkts = %u\n", c->num_pkts);
-    fprintf(f, "type = %u\n", c->type);
     fprintf(f, "zeros = %u\n", c->include_zeroes);
     fprintf(f, "retrans = %u\n", c->include_retrans);
     fprintf(f, "dist = %u\n", c->byte_distribution);
@@ -531,18 +559,20 @@ void config_print (FILE *f, const struct configuration *c) {
     config_print_all_features_bool(feature_list);
 
     fprintf(f, "verbosity = %u\n", c->verbosity);
+    fprintf(f, "threads = %u\n", c->num_threads);
+    fprintf(f, "updater = %u\n", c->updater_on);
   
     /* note: anon_print_subnets is silent when no subnets are configured */
     anon_print_subnets(f);
 }
 
 /**
- * \fn void config_print_json (zfile f, const struct configuration *c)
+ * \fn void config_print_json (zfile f, const configuration_t *c)
  * \param f file to print configuration to
  * \param c pointer to the configuration structure
  * \return none
  */
-void config_print_json (zfile f, const struct configuration *c) {
+void config_print_json (zfile f, const configuration_t *c) {
     unsigned int i;
 
     zprintf(f, "{\"version\":\"%s\",", VERSION);
@@ -561,7 +591,6 @@ void config_print_json (zfile f, const struct configuration *c) {
     zprintf(f, "\"retain\":%u,", c->retain_local);
     zprintf(f, "\"bidir\":%u,", c->bidir);
     zprintf(f, "\"num_pkts\":%u,", c->num_pkts);
-    zprintf(f, "\"type\":%u,", c->type);
     zprintf(f, "\"zeros\":%u,", c->include_zeroes);
     zprintf(f, "\"retrans\":%u,", c->include_retrans);
     zprintf(f, "\"dist\":%u,", c->byte_distribution);
@@ -575,6 +604,8 @@ void config_print_json (zfile f, const struct configuration *c) {
     zprintf(f, "\"useranon\":\"%s\",", val(c->anon_http_file));
     zprintf(f, "\"bpf\":\"%s\",", val(c->bpf_filter_exp));
     zprintf(f, "\"verbosity\":%u,", c->verbosity);
+    zprintf(f, "\"threads\":%u,", c->num_threads);
+    zprintf(f, "\"updater\":%u,", c->updater_on);
 
     config_print_json_all_features_bool(feature_list);
 

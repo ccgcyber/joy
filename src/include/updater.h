@@ -1,6 +1,6 @@
 /*
  *
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,8 +37,8 @@
 /**
  * \file updater.h
  *
- * \brief Interface to updater code used keep the label subnets up to
- *        date and also re-fresh the classifers.
+ * \brief Interface to updater code used keep JOY parameters
+ *        up to date with latest data.
  *
  */
 
@@ -47,13 +47,10 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include "safe_lib.h"
 #include <ctype.h>
 #include <pthread.h>
 #include "radix_trie.h"
-
-/** maxiumum lengnth of a URL string */
-#define MAX_URL_LENGTH 512
 
 /** Work interval defined for the updater main processing loop */
 #define UPDATER_WORK_INTERVAL (86400) /* (60*60*24) = 86400 mins, 24 hours */

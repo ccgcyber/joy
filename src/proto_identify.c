@@ -43,13 +43,12 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include "safe_lib.h"
 
 #include "proto_identify.h"
 #include "config.h"
 #include "err.h"
 
-extern struct configuration *glb_config;
 extern FILE *info;
 
 /* --------------------------------------------------
@@ -81,8 +80,8 @@ struct keyword_list {
     struct keyword_container keyword[MAX_KEYWORDS];
 };
 
-static struct keyword_list tcp_keywords = {0};
-static struct keyword_list udp_keywords = {0};
+static struct keyword_list tcp_keywords;
+static struct keyword_list udp_keywords;
 
 /**
  * \brief Wildcard represents "any" value.
@@ -130,11 +129,11 @@ static int add_keyword(struct keyword_list *wordlist,
     kc = &wordlist->keyword[wordlist->count];
 
     /* Copy the value array */
-    memcpy(kc->value, value, value_bytes_len);
+    memcpy_s(kc->value, value_bytes_len, value, value_bytes_len);
     /* Convert from byte length to array length */
     kc->value_len = (value_bytes_len / sizeof(uint16_t));
     /* Copy the protocol inference struct */
-    memcpy(&kc->pi, pi, sizeof(struct pi_container));
+    memcpy_s(&kc->pi, sizeof(struct pi_container), pi, sizeof(struct pi_container));
 
     /*
      * Increment the count of keywords ingested
@@ -598,7 +597,7 @@ static int keyword_dict_add_keyword(struct keyword_dict_node *root,
                                     const struct keyword_container *kc) {
 
     struct keyword_dict_node *node = NULL;
-    int i = 0;
+    unsigned int i = 0;
 
     if (root == NULL || kc == NULL) {
         return 0;
@@ -667,7 +666,7 @@ static int keyword_dict_add_keyword(struct keyword_dict_node *root,
 static int construct_keyword_dict(struct keyword_dict_node **root,
                                   struct keyword_list *wordlist) {
 
-    int i = 0;
+    unsigned int i = 0;
 
     if (root == NULL || *root != NULL) {
         return 1;
@@ -761,6 +760,11 @@ static const struct pi_container *search_keyword_dict(const struct keyword_dict_
  * \return 0 for success, 1 for failure
  */
 int proto_identify_init(void) {
+
+    /* esnure the keyword dictionary is clean */
+    memset_s(&tcp_keywords,  sizeof(tcp_keywords), 0x00, sizeof(tcp_keywords));
+    memset_s(&udp_keywords,  sizeof(tcp_keywords), 0x00, sizeof(tcp_keywords));
+
     /* Initialize the list of keywords */
     if (init_keywords()) {
         joy_log_err("failed to initialize keyword list");

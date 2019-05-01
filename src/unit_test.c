@@ -41,30 +41,27 @@
  */
 
 #include <stdio.h>
-#include <string.h>
 #include "radix_trie.h"
 #include "modules.h"
 #include "p2f.h"
 #include "config.h"
 #include "err.h"
+#include "safe_lib.h"
 #include "joy_api.h"
 
 /**
- * \fn int main (int argc, char *argv[]) 
+ * \fn int main ()
  * \brief main entry point for unit test execution
- * \param argc command line argument count
- * \param argv command line arguments
  * \return 0
  */
-int main (int argc, char *argv[]) {
+int main (void) {
     int rc = 0;
     joy_init_t init_data;
 
     /* setup the joy options we want */
-    memset(&init_data, 0x00, sizeof(joy_init_t));
+    memset_s(&init_data, sizeof(joy_init_t), 0x00, sizeof(joy_init_t));
 
     /* Set logging to warning level */
-    init_data.type = 1;
     init_data.verbosity = JOY_LOG_WARN;
 
     /* intialize joy */

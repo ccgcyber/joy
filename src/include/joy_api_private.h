@@ -53,16 +53,16 @@
 /* VPP optimized implementations */
 
 #define JOY_API_ALLOC_CONTEXT(a,b)   \
-    vec_validate_aligned(a, (b-1), CLIB_CACHE_LINE_BYTES);
+    vec_validate_aligned(a, (b-1), CLIB_CACHE_LINE_BYTES)
 
 #define JOY_API_FREE_CONTEXT(a)    \
-    vec_free(a);
+    vec_free(a)
 
 #define JOY_MAX_CTX_INDEX(a)   \
-    vec_len(a);
+    vec_len(a)
 
 #define JOY_CTX_AT_INDEX(a,b)   \
-    vec_elt_at_index(a,b);
+    vec_elt_at_index(a,b)
 
 #else
 
@@ -76,15 +76,22 @@
     a = NULL;
 
 #define JOY_MAX_CTX_INDEX(a)   \
-    joy_num_contexts;
+    joy_num_contexts
 
 #define JOY_CTX_AT_INDEX(a,b)   \
-    (a + b);
+    (a + b)
 
 #endif
 
 /* per instance context data */
 struct joy_ctx_data  {
+    unsigned int ctx_id;
+    uint32_t curr_pkt_type;
+    uint32_t idp_recs_ready;
+    uint32_t tls_recs_ready;
+    uint32_t splt_recs_ready;
+    uint32_t salt_recs_ready;
+    uint32_t bd_recs_ready;
     zfile output;
     char *output_file_basename;
     unsigned int records_in_file;

@@ -1,6 +1,6 @@
 /*
  *
- * Copyright (c) 2016-2018 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -53,6 +53,8 @@
 #include <math.h>
 #include <ctype.h>
 #include <float.h>   /* for FLT_EPSILON */
+#include "safe_lib.h"
+#include "pkt.h"
 #include "pkt_proc.h" /* packet processing               */
 #include "p2f.h"      /* joy data structures       */
 #include "err.h"      /* error codes and error reporting */
@@ -88,11 +90,11 @@
 #define T_WINDOW 10
 #define T_ACTIVE 20
 
-static const struct timeval time_window = { T_WINDOW, 0 };
+static struct timeval time_window = { T_WINDOW, 0 };
 
-static const struct timeval active_timeout = { T_ACTIVE, 0 };
+static struct timeval active_timeout = { T_ACTIVE, 0 };
 
-static const unsigned int active_max = (T_WINDOW + T_ACTIVE);
+static unsigned int active_max = (T_WINDOW + T_ACTIVE);
 
 static const int include_os = 1;
 
@@ -129,10 +131,10 @@ void flocap_stats_output (joy_ctx_data *ctx, FILE *f) {
 #endif
 
         gettimeofday(&now, NULL);
-        memset(time_str, 0x00, sizeof(time_str));
+        memset_s(time_str, sizeof(time_str), 0x00, sizeof(time_str));
 
         joy_timer_sub(&now, &ctx->last_stats_output_time, &tmp);
-    seconds = (float) joy_timeval_to_milliseconds(tmp) / 1000.0;
+    seconds = (float) (joy_timeval_to_milliseconds(tmp) / 1000.0);
 
     bps = (float) (ctx->stats.num_bytes - ctx->last_stats.num_bytes) / seconds;
     pps = (float) (ctx->stats.num_packets - ctx->last_stats.num_packets) / seconds;
@@ -143,8 +145,8 @@ void flocap_stats_output (joy_ctx_data *ctx, FILE *f) {
 #else
         strftime(time_str, sizeof(time_str) - 1, "%a %b %d %H:%M:%S %Z %Y", localtime(&now.tv_sec));
 #endif
-    fprintf(f, "%s info: %lu packets, %lu active records, %lu records output, %lu alloc fails, %.4e bytes/sec, %.4e packets/sec, %.4e records/sec\n",
-              time_str, ctx->stats.num_packets, ctx->stats.num_records_in_table, ctx->stats.num_records_output, ctx->stats.malloc_fail, bps, pps, rps);
+    fprintf(f, "Context id: %d, %s info: %lu packets, %lu active records, %lu records output, %lu alloc fails, %.4e bytes/sec, %.4e packets/sec, %.4e records/sec\n",
+              ctx->ctx_id, time_str, ctx->stats.num_packets, ctx->stats.num_records_in_table, ctx->stats.num_records_output, ctx->stats.malloc_fail, bps, pps, rps);
     fflush(f);
 
     ctx->last_stats_output_time = now;
@@ -173,13 +175,39 @@ void flocap_stats_timer_init (joy_ctx_data *ctx) {
  * \return Hash of \p f
  */
 static unsigned int flow_key_hash (const flow_key_t *f) {
+    uint32_t hash = 0;
 
     if (glb_config->flow_key_match_method == EXACT_MATCH) {
-          return (((unsigned int)f->sa.s_addr * 0xef6e15aa)
-            ^ ((unsigned int)f->da.s_addr * 0x65cd52a0)
-            ^ ((unsigned int)f->sp * 0x8216)
-            ^ ((unsigned int)f->dp * 0xdda37)
-            ^ ((unsigned int)f->prot * 0xbc06)) & flow_key_hash_mask;
+        /*
+         * for IPv4 addresses, the upper 96 bits are zero, so using the IPv6 union of the structure
+         * does not affect the sum or the resulting hash.
+         */
+#ifdef DARWIN
+        hash += (uint32_t)f->sa.v6_sa.__u6_addr.__u6_addr32[0];
+        hash += (uint32_t)f->sa.v6_sa.__u6_addr.__u6_addr32[1];
+        hash += (uint32_t)f->sa.v6_sa.__u6_addr.__u6_addr32[2];
+        hash += (uint32_t)f->sa.v6_sa.__u6_addr.__u6_addr32[3];
+        hash += (uint32_t)f->da.v6_da.__u6_addr.__u6_addr32[0];
+        hash += (uint32_t)f->da.v6_da.__u6_addr.__u6_addr32[1];
+        hash += (uint32_t)f->da.v6_da.__u6_addr.__u6_addr32[2];
+        hash += (uint32_t)f->da.v6_da.__u6_addr.__u6_addr32[3];
+#else
+        hash += (uint32_t)f->sa.v6_sa.__in6_u.__u6_addr32[0];
+        hash += (uint32_t)f->sa.v6_sa.__in6_u.__u6_addr32[1];
+        hash += (uint32_t)f->sa.v6_sa.__in6_u.__u6_addr32[2];
+        hash += (uint32_t)f->sa.v6_sa.__in6_u.__u6_addr32[3];
+        hash += (uint32_t)f->da.v6_da.__in6_u.__u6_addr32[0];
+        hash += (uint32_t)f->da.v6_da.__in6_u.__u6_addr32[1];
+        hash += (uint32_t)f->da.v6_da.__in6_u.__u6_addr32[2];
+        hash += (uint32_t)f->da.v6_da.__in6_u.__u6_addr32[3];
+#endif
+        hash += (uint32_t)f->sp;
+        hash += (uint32_t)f->dp;
+        hash += (uint32_t)f->prot;
+
+        hash *= 0xFFD9;
+        hash -= (hash >> 16);
+        hash &= flow_key_hash_mask;
 
     } else {  /* flow_key_match_method == NEAR_MATCH */
         /*
@@ -188,19 +216,16 @@ static unsigned int flow_key_hash (const flow_key_t *f) {
          * This is done by omitting addresses and sorting the ports into
          * order before hashing.
          */
-        unsigned int hi, lo;
+        hash += (uint32_t)f->sp;
+        hash += (uint32_t)f->dp;
+        hash += (uint32_t)f->prot;
 
-        if (f->sp > f->dp) {
-            hi = f->sp;
-            lo = f->dp;
-        } else {
-            hi = f->dp;
-            lo = f->sp;
-        }
-
-        return ((hi * 0x8216) ^ (lo * 0xdda37)
-            ^ ((unsigned int)f->prot * 0xbc06)) & flow_key_hash_mask;
+        hash *= 0xFFD9;
+        hash -= (hash >> 16);
+        hash &= flow_key_hash_mask;
     }
+
+    return hash;
 }
 
 /**
@@ -209,12 +234,8 @@ static unsigned int flow_key_hash (const flow_key_t *f) {
  * \param return
  */
 void flow_record_list_init (joy_ctx_data *ctx) {
-    unsigned int i;
-
     ctx->flow_record_chrono_first = ctx->flow_record_chrono_last = NULL;
-    for (i=0; i<FLOW_RECORD_LIST_LEN; i++) {
-        ctx->flow_record_list_array[i] = NULL;
-    }
+    memset_s(ctx->flow_record_list_array,  sizeof(ctx->flow_record_list_array), 0x00, sizeof(ctx->flow_record_list_array));
 }
 
 /**
@@ -223,7 +244,8 @@ void flow_record_list_init (joy_ctx_data *ctx) {
  * \return none
  */
 void flow_record_list_free (joy_ctx_data *ctx) {
-    flow_record_t *record, *tmp;
+    flow_record_t *record = NULL;
+    flow_record_t *tmp = NULL;
     unsigned int i, count = 0;
 
     for (i=0; i<FLOW_RECORD_LIST_LEN; i++) {
@@ -238,6 +260,7 @@ void flow_record_list_free (joy_ctx_data *ctx) {
     }
     ctx->flow_record_chrono_first = NULL;
     ctx->flow_record_chrono_last = NULL;
+    joy_log_debug("(%d) flow records free'd from context(%d)", count, ctx->ctx_id);
 }
 
 /**
@@ -248,19 +271,28 @@ void flow_record_list_free (joy_ctx_data *ctx) {
  */
 static int flow_key_is_eq (const flow_key_t *a,
                            const flow_key_t *b) {
-    if (a->sa.s_addr != b->sa.s_addr) {
+    errno_t err = EOK;
+    int diff = 0;
+
+    if (a->prot != b->prot) {
         return 1;
     }
-    if (a->da.s_addr != b->da.s_addr) {
-        return 1;
-    }
+
     if (a->sp != b->sp) {
         return 1;
     }
+
     if (a->dp != b->dp) {
         return 1;
     }
-    if (a->prot != b->prot) {
+
+    err = memcmp_s(&a->sa.v6_sa, sizeof(struct in6_addr), &b->sa.v6_sa, sizeof(struct in6_addr), &diff);
+    if ((err != EOK) || (diff != 0)) {
+        return 1;
+    }
+
+    err = memcmp_s(&a->da.v6_da, sizeof(struct in6_addr), &b->da.v6_da, sizeof(struct in6_addr), &diff);
+    if ((err != EOK) || (diff != 0)) {
         return 1;
     }
 
@@ -276,6 +308,9 @@ static int flow_key_is_eq (const flow_key_t *a,
  */
 static int flow_key_is_twin (const flow_key_t *a,
                              const flow_key_t *b) {
+    int diff1 = 0;
+    int diff2 = 0;
+
     if (glb_config->flow_key_match_method == NEAR_MATCH) {
         /*
          * Require that only one address match, so that we can find twins
@@ -286,17 +321,21 @@ static int flow_key_is_twin (const flow_key_t *a,
          * Translation (NAT), and not Port Address Translation (PAT).  NAT
          * is commonly done with and without PAT.
          */
-        if (a->sa.s_addr != b->da.s_addr && a->da.s_addr != b->sa.s_addr) {
+        memcmp_s(&a->sa.v6_sa, sizeof(struct in6_addr), &b->da.v6_da, sizeof(struct in6_addr), &diff1);
+        memcmp_s(&a->da.v6_da, sizeof(struct in6_addr), &b->sa.v6_sa, sizeof(struct in6_addr), &diff2);
+        if ((diff1 != 0) && (diff2 != 0)) {
             return 1;
         }
     } else {
         /*
          * Require that both addresses match, that is, (sa, da) == (da, sa)
          */
-        if (a->sa.s_addr != b->da.s_addr) {
+        memcmp_s(&a->sa.v6_sa, sizeof(struct in6_addr), &b->da.v6_da, sizeof(struct in6_addr), &diff1);
+        if (diff1 != 0) {
             return 1;
         }
-        if (a->da.s_addr != b->sa.s_addr) {
+        memcmp_s(&a->da.v6_da, sizeof(struct in6_addr), &b->sa.v6_sa, sizeof(struct in6_addr), &diff2);
+        if (diff2 != 0) {
             return 1;
         }
     }
@@ -321,16 +360,14 @@ static int flow_key_is_twin (const flow_key_t *a,
  * \return none
  */
 static void flow_key_copy (flow_key_t *dst, const flow_key_t *src) {
-    dst->sa.s_addr = src->sa.s_addr;
-    dst->da.s_addr = src->da.s_addr;
-    dst->sp = src->sp;
-    dst->dp = src->dp;
-    dst->prot = src->prot;
+    memcpy_s(dst, sizeof(flow_key_t), src, sizeof(flow_key_t));
 }
 
 #define MAX_TTL 255
 
-flow_record_t *flow_key_get_twin(joy_ctx_data *ctx, const flow_key_t *key);
+static flow_record_t *flow_key_get_twin(joy_ctx_data *ctx,
+                                        const flow_key_t *key,
+                                        unsigned int key_hash);
 
 /**
  * \brief Initialize a flow_record.
@@ -346,7 +383,7 @@ static void flow_record_init (joy_ctx_data *ctx,
     flocap_stats_incr_records_in_table(ctx);
 
     /* Zero out the flow_record structure */
-    memset(record, 0, sizeof(flow_record_t));
+    memset_s(record, sizeof(flow_record_t), 0, sizeof(flow_record_t));
 
     /* Set the flow_key and TTL */
     flow_key_copy(&record->key, key);
@@ -382,12 +419,12 @@ static flow_record_t *flow_record_list_find_record_by_key (const flow_record_lis
     /* Find a record matching the flow key, if it exists */
     while (record != NULL) {
         if (flow_key_is_eq(key, &record->key) == 0) {
-            debug_printf("LIST (head location: %p) record %p found\n", list, record);
+            joy_log_debug("LIST (head location: %p) record %p found\n", list, record);
             return record;
         }
         record = record->next;
     }
-    debug_printf("LIST (head location: %p) did not find record\n", list);
+    joy_log_debug("LIST (head location: %p) did not find record\n", list);
 
     return NULL;
 }
@@ -405,12 +442,12 @@ static flow_record_t *flow_record_list_find_twin_by_key (const flow_record_list 
     /* find a record matching the flow key, if it exists */
     while (record != NULL) {
         if (flow_key_is_twin(key, &record->key) == 0) {
-            debug_printf("LIST (head location: %p) record %p found\n", list, record);
+            joy_log_debug("LIST (head location: %p) record %p found\n", list, record);
             return record;
         }
         record = record->next;
     }
-    debug_printf("LIST (head location: %p) did not find record\n", list);
+    joy_log_debug("LIST (head location: %p) did not find record\n", list);
 
     return NULL;
 }
@@ -434,7 +471,7 @@ static void flow_record_list_prepend (flow_record_list *head,
         record->next = tmp;
     }
     *head = record;
-    debug_printf("LIST (head location %p) head set to %p (prev: %p, next: %p)\n",
+    joy_log_debug("LIST (head location %p) head set to %p (prev: %p, next: %p)\n",
                      head, *head, record->prev, record->next);
 }
 
@@ -451,7 +488,7 @@ static unsigned int flow_record_list_remove (flow_record_list *head,
         return 1;    /* don't process NULL pointers; probably an error to get here */
     }
 
-    debug_printf("LIST (head location %p) removing record at %p (prev: %p, next: %p)\n",
+    joy_log_debug("LIST (head location %p) removing record at %p (prev: %p, next: %p)\n",
                    head, r, r->prev, r->next);
 
     if (r->prev == NULL) {
@@ -477,14 +514,14 @@ static unsigned int flow_record_list_remove (flow_record_list *head,
          * its previous entry to point to its next entry
          */
         r->prev->next = r->next;
-        debug_printf("LIST (head location %p) now prev->next: %p\n", head, r->prev->next);
+        joy_log_debug("LIST (head location %p) now prev->next: %p\n", head, r->prev->next);
         if (r->next != NULL) {
             /*
              * the next entry's previous pointer must be made to point to
              * the previous entry
              */
             r->next->prev = r->prev;
-            debug_printf("LIST (head location %p) now next->prev: %p\n", head, r->next->prev);
+            joy_log_debug("LIST (head location %p) now next->prev: %p\n", head, r->next->prev);
         }
     }
 
@@ -513,9 +550,6 @@ static void flow_record_chrono_list_append (joy_ctx_data *ctx, flow_record_t *re
  * \return none
  */
 static void flow_record_chrono_list_remove (joy_ctx_data *ctx, flow_record_t *record) {
-    if (record == NULL) {
-        return;
-    }
 
     if (record == ctx->flow_record_chrono_first) {
         ctx->flow_record_chrono_first = record->time_next;
@@ -644,11 +678,14 @@ flow_record_t *flow_key_get_record (joy_ctx_data *ctx,
     if (record != NULL) {
        if (create_new_records && flow_record_is_in_chrono_list(ctx, record)
            && flow_record_is_active_expired(record, header)) {
-            /*
-             *  Active-timeout exceeded for this flow_record; print and delete
-             *  it, then set record = NULL to cause the creation of a new
-             *  flow_record to be used in further packet processing
-             */
+           /*
+            *  Active-timeout exceeded for this flow_record; print and delete
+            *  it, then set record = NULL to cause the creation of a new
+            *  flow_record to be used in further packet processing
+            *
+            *  All applications have an output file available. If it is not being used,
+            *  then the printing of this record will just go to a file that is ignored.
+            */
            flow_record_print_and_delete(ctx, record);
            record = NULL;
        } else {
@@ -661,8 +698,8 @@ flow_record_t *flow_key_get_record (joy_ctx_data *ctx,
     if (create_new_records) {
 
         /* allocate and initialize a new flow record */
-        record = malloc(sizeof(flow_record_t));
-        debug_printf("LIST record %p allocated\n", record);
+        record = calloc(1, sizeof(flow_record_t));
+        joy_log_debug("LIST record %p allocated\n", record);
 
         if (record == NULL) {
             joy_log_warn("could not allocate memory for flow_record");
@@ -671,6 +708,7 @@ flow_record_t *flow_key_get_record (joy_ctx_data *ctx,
         }
 
         flow_record_init(ctx, record, key);
+        record->key_hash = hash_key;
 
         /* enter record into flow_record_list */
         flow_record_list_prepend(&ctx->flow_record_list_array[hash_key], record);
@@ -681,15 +719,12 @@ flow_record_t *flow_key_get_record (joy_ctx_data *ctx,
          * record into the chronological list
          */
         if (glb_config->bidir) {
-            record->twin = flow_key_get_twin(ctx, key);
-            debug_printf("LIST record %p is twin of %p\n", record, record->twin);
+            record->twin = flow_key_get_twin(ctx, key, hash_key);
+            joy_log_debug("LIST record %p is twin of %p\n", record, record->twin);
         }
         if (record->twin != NULL) {
             if (record->twin->twin != NULL) {
-                fprintf(info, "warning: found twin that already has a twin; not setting twin pointer\n");
-                debug_printf("\trecord:    (hash key %x)(addr: %p)\n", flow_key_hash(&record->key), record);
-                debug_printf("\ttwin:      (hash key %x)(addr: %p)\n", flow_key_hash(&record->twin->key), &record->twin);
-                debug_printf("\ttwin twin: (hash key %x)(addr: %p)\n", flow_key_hash(&record->twin->twin->key), &record->twin->key);
+                joy_log_info("warning: found twin that already has a twin; not setting twin pointer\n");
                 /*
                  * experimental - consider this record an orphan, add it to chrono list, but without its twin pointer set
                  */
@@ -704,7 +739,6 @@ flow_record_t *flow_key_get_record (joy_ctx_data *ctx,
             flow_record_chrono_list_append(ctx, record);
         }
     }
-
     return record;
 }
 
@@ -715,35 +749,47 @@ flow_record_t *flow_key_get_record (joy_ctx_data *ctx,
  */
 static void flow_record_delete (joy_ctx_data *ctx, flow_record_t *r) {
 
-    if (flow_record_list_remove(&ctx->flow_record_list_array[flow_key_hash(&r->key)], r) != 0) {
+    if (flow_record_list_remove(&ctx->flow_record_list_array[r->key_hash], r) != 0) {
         joy_log_err("problem removing flow record %p from list", r);
         return;
     }
 
     flocap_stats_decr_records_in_table(ctx);
 
+    /* update context counts */
+    if (r->idp_len > 0) {
+        --ctx->idp_recs_ready;
+    }
+
+    if (r->op >= ETTA_MIN_PACKETS) {
+        --ctx->splt_recs_ready;
+    }
+
+    if (r->ob >= ETTA_MIN_OCTETS) {
+        --ctx->bd_recs_ready;
+    }
+
+    if (r->tls != NULL) {
+        if (r->tls->done_handshake) {
+            --ctx->tls_recs_ready;
+        }
+    }
+
+    if (r->salt != NULL) {
+        if (r->salt->np >= ETTA_MIN_PACKETS) {
+            --ctx->salt_recs_ready;
+        }
+    }
+
     /*
      * free the memory allocated inside of flow record
      */
-    if (r->idp) {
-        free(r->idp);
-    }
-
-    if (r->exe_name) {
-        free(r->exe_name);
-    }
-
-        if (r->full_path) {
-                free(r->full_path);
-        }
-
-        if (r->file_version) {
-                free(r->file_version);
-        }
-
-        if (r->file_hash) {
-                free(r->file_hash);
-        }
+    free(r->idp);
+    free(r->exe_name);
+    free(r->full_path);
+    free(r->file_version);
+    free(r->file_hash);
+    free(r->joy_app_data);
 
     delete_all_features(feature_list);
 
@@ -751,7 +797,7 @@ static void flow_record_delete (joy_ctx_data *ctx, flow_record_t *r) {
      * zeroize memory (this is defensive coding; pointers to deleted
      * records will result in crashes rather than silent errors)
      */
-    memset(r, 0, sizeof(flow_record_t));
+    memset_s(r, sizeof(flow_record_t), 0, sizeof(flow_record_t));
     free(r);
     r = NULL;
 }
@@ -773,24 +819,40 @@ int flow_key_set_process_info(joy_ctx_data *ctx, const flow_key_t *key, const ho
         // flow_key_print(key);
         if (r) {
                 if (r->exe_name == NULL) {
-                        r->exe_name = strdup(data->exe_name);
+                    //r->exe_name = strndup(data->exe_name, PID_MAX_LEN);
+                   r->exe_name = strdup(data->exe_name);
                 }
                 if (r->full_path == NULL) {
                     if (data->full_path)
-                        r->full_path = strdup(data->full_path);
+                        r->full_path = strndup(data->full_path, PROC_PATH_LEN);
                 }
                 if (r->file_version == NULL) {
                     if (data->file_version)
-                        r->file_version = strdup(data->file_version);
+                        r->file_version = strndup(data->file_version, PROC_EXE_LEN);
                 }
                 if (r->file_hash == NULL) {
                     if (data->hash)
-                        r->file_hash = strdup(data->hash);
+                        r->file_hash = strndup(data->hash, 100);// ??
                 }
                 r->uptime_seconds = data->uptime_seconds;
                 return ok;
         }
         return failure;
+}
+
+/**
+ * \brief Update the timeout values for flow record expiration
+ * \param inact number of seconds for inactivity timeout
+ * \param act number of seconds for activity timeout
+ * \return none
+ */
+void flow_record_update_timeouts (unsigned int inact, unsigned int act) {
+
+    time_window.tv_sec  = (inact > 0) ? inact : T_WINDOW;
+    time_window.tv_usec = 0;
+    active_timeout.tv_sec  = (act > 0) ? act : T_ACTIVE;
+    active_timeout.tv_usec = 0;
+    active_max = (time_window.tv_sec + active_timeout.tv_sec);
 }
 
 /**
@@ -802,20 +864,30 @@ int flow_key_set_process_info(joy_ctx_data *ctx, const flow_key_t *key, const ho
  */
 void flow_record_update_byte_count (flow_record_t *f, const void *x, unsigned int len) {
     const unsigned char *data = x;
-    int i;
-
-    if (glb_config->byte_distribution || glb_config->report_entropy) {
-        for (i=0; i<len; i++) {
-            f->byte_count[data[i]]++;
-        }
-    }
+    unsigned int i;
+    unsigned int current_count = 0;
 
     /*
-     * implementation note: overflow might occur in the byte_count
-     * array; if the integer type for that array is small, then we
-     * should check for overflow and rebalance the array as needed
+     * implementation note: The spec says that 4000 octets is enough of a
+     * sample size to accurately reflect the byte distribution. Also, to avoid
+     * wrapping of the byte count at the 16-bit boundry, we stop counting once
+     * the 4000th octet has been seen for a flow.
      */
 
+    /* octet count was already incremented before processing this payload */
+    current_count = f->ob - len;
+
+    if (glb_config->byte_distribution || glb_config->report_entropy) {
+        if (current_count < ETTA_MIN_OCTETS) {
+            for (i=0; i<len; i++) {
+                f->byte_count[data[i]]++;
+                current_count++;
+                if (current_count >= ETTA_MIN_OCTETS) {
+                   break;
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -827,7 +899,7 @@ void flow_record_update_byte_count (flow_record_t *f, const void *x, unsigned in
  */
 void flow_record_update_compact_byte_count (flow_record_t *f, const void *x, unsigned int len) {
     const unsigned char *data = x;
-    int i;
+    unsigned int i;
 
     if (glb_config->compact_byte_distribution) {
         for (i=0; i<len; i++) {
@@ -846,7 +918,7 @@ void flow_record_update_compact_byte_count (flow_record_t *f, const void *x, uns
 void flow_record_update_byte_dist_mean_var (flow_record_t *f, const void *x, unsigned int len) {
     const unsigned char *data = x;
     double delta;
-    int i;
+    unsigned int i;
 
     if (glb_config->byte_distribution || glb_config->report_entropy) {
         for (i=0; i<len; i++) {
@@ -858,7 +930,7 @@ void flow_record_update_byte_dist_mean_var (flow_record_t *f, const void *x, uns
     }
 }
 
-static float flow_record_get_byte_count_entropy (const unsigned int byte_count[256],
+static float flow_record_get_byte_count_entropy (const uint32_t byte_count[256],
     unsigned int num_bytes) {
     int i;
     float tmp, sum = 0.0;
@@ -875,9 +947,9 @@ static float flow_record_get_byte_count_entropy (const unsigned int byte_count[2
 
 static void print_bytes_dir_time (joy_ctx_data *ctx,
                                   unsigned short int pkt_len,
-                                  char *dir,
+                                  const char *dir,
                                   struct timeval ts,
-                                  char *term) {
+                                  const char *term) {
     if (pkt_len < 32768) {
         zprintf(ctx->output, "{\"b\":%u,\"dir\":\"%s\",\"ipt\":%u}%s",
                     pkt_len, dir, joy_timeval_to_milliseconds(ts), term);
@@ -907,11 +979,11 @@ void zprintf_raw_as_hex (zfile f,
     zprintf(f, "\"");
 }
 
-static void reduce_bd_bits (unsigned int *bd,
+static void reduce_bd_bits (uint32_t *bd,
                             unsigned int len) {
     int mask = 0;
     int shift = 0;
-    int i = 0;
+    unsigned int i = 0;
 
     for (i = 0; i < len; i++) {
         mask = mask | bd[i];
@@ -976,9 +1048,9 @@ static void print_executable_json (zfile f, const flow_record_t *rec) {
         }
         if (rec->uptime_seconds > 0) {
             if (comma) {
-                zprintf(f, ",\"uptime\":%lu", rec->uptime_seconds);
+                zprintf(f, ",\"uptime\":%llu", (unsigned long long)rec->uptime_seconds);
             } else {
-                zprintf(f, "\"uptime\":%lu", rec->uptime_seconds);
+                zprintf(f, "\"uptime\":%llu", (unsigned long long)rec->uptime_seconds);
                 comma = 1;
             }
         }
@@ -1213,11 +1285,12 @@ static const flow_record_t *get_client_flow(const flow_record_t *a,
 static void flow_record_print_json
  (joy_ctx_data *ctx, const flow_record_t *record) {
     unsigned int i, j, imax, jmax;
-    struct timeval ts, ts_last, ts_start, ts_end, tmp;
+    struct timeval ts, ts_last, ts_start, ts_end, ts_tmp;
     const flow_record_t *rec = NULL;
     unsigned int pkt_len;
-    char *dir;
+    const char *dir;
     char ipv4_addr[INET_ADDRSTRLEN];
+    char ipv6_addr[INET6_ADDRSTRLEN];
 
     flocap_stats_incr_records_output(ctx);
     ctx->records_in_file++;
@@ -1272,17 +1345,27 @@ static void flow_record_print_json
      */
     zprintf(ctx->output, "{");
 
-    if (ipv4_addr_needs_anonymization(&rec->key.sa)) {
-        zprintf(ctx->output, "\"sa\":\"%s\",", addr_get_anon_hexstring(&rec->key.sa));
+    if (rec->ip_type == ETH_TYPE_IPV6) {
+        inet_ntop(AF_INET6, &rec->key.sa.v6_sa, ipv6_addr, INET6_ADDRSTRLEN);
+        zprintf(ctx->output, "\"sa\":\"%s\",", ipv6_addr);
+        inet_ntop(AF_INET6, &rec->key.da.v6_da, ipv6_addr, INET6_ADDRSTRLEN);
+        zprintf(ctx->output, "\"da\":\"%s\",", ipv6_addr);
     } else {
-        inet_ntop(AF_INET, &rec->key.sa, ipv4_addr, INET_ADDRSTRLEN);
-        zprintf(ctx->output, "\"sa\":\"%s\",", ipv4_addr);
-    }
-    if (ipv4_addr_needs_anonymization(&rec->key.da)) {
-        zprintf(ctx->output, "\"da\":\"%s\",", addr_get_anon_hexstring(&rec->key.da));
-    } else {
-        inet_ntop(AF_INET, &rec->key.da, ipv4_addr, INET_ADDRSTRLEN);
-        zprintf(ctx->output, "\"da\":\"%s\",", ipv4_addr);
+        char buffer[IPV4_ANON_LEN];
+        if (ipv4_addr_needs_anonymization(&rec->key.sa.v4_sa)) {
+            addr_get_anon_hexstring(&rec->key.sa.v4_sa, (char*)&buffer, IPV4_ANON_LEN);
+            zprintf(ctx->output, "\"sa\":\"%s\",", buffer);
+        } else {
+            inet_ntop(AF_INET, &rec->key.sa.v4_sa, ipv4_addr, INET_ADDRSTRLEN);
+            zprintf(ctx->output, "\"sa\":\"%s\",", ipv4_addr);
+        }
+        if (ipv4_addr_needs_anonymization(&rec->key.da.v4_da)) {
+            addr_get_anon_hexstring(&rec->key.da.v4_da, (char*)&buffer, IPV4_ANON_LEN);
+            zprintf(ctx->output, "\"da\":\"%s\",", buffer);
+        } else {
+            inet_ntop(AF_INET, &rec->key.da.v4_da, ipv4_addr, INET_ADDRSTRLEN);
+            zprintf(ctx->output, "\"da\":\"%s\",", ipv4_addr);
+        }
     }
     zprintf(ctx->output, "\"pr\":%u,", rec->key.prot);
 
@@ -1302,10 +1385,12 @@ static void flow_record_print_json
     if (glb_config->num_subnets) {
         attr_flags flag;
 
-        flag = radix_trie_lookup_addr(glb_config->rt, rec->key.sa);
-        attr_flags_json_print_labels(glb_config->rt, flag, "sa_labels", ctx->output);
-        flag = radix_trie_lookup_addr(glb_config->rt, rec->key.da);
-        attr_flags_json_print_labels(glb_config->rt, flag, "da_labels", ctx->output);
+        if (rec->ip_type == ETH_TYPE_IP) {
+            flag = radix_trie_lookup_addr(glb_config->rt, rec->key.sa.v4_sa);
+            attr_flags_json_print_labels(glb_config->rt, flag, "sa_labels", ctx->output);
+            flag = radix_trie_lookup_addr(glb_config->rt, rec->key.da.v4_da);
+            attr_flags_json_print_labels(glb_config->rt, flag, "da_labels", ctx->output);
+        }
     }
 
     /*
@@ -1333,7 +1418,7 @@ static void flow_record_print_json
 
     if (rec->twin == NULL) {
 
-        imax = rec->op > NUM_PKT_LEN ? NUM_PKT_LEN : rec->op;
+        imax = rec->op > glb_config->num_pkts ? glb_config->num_pkts : rec->op;
         if (imax == 0) {
             ; /* no packets had data, so we print out nothing */
         } else {
@@ -1354,8 +1439,8 @@ static void flow_record_print_json
         }
         zprintf(ctx->output, "]");
     } else {
-        imax = rec->op > NUM_PKT_LEN ? NUM_PKT_LEN : rec->op;
-        jmax = rec->twin->op > NUM_PKT_LEN ? NUM_PKT_LEN : rec->twin->op;
+        imax = rec->op > glb_config->num_pkts ? glb_config->num_pkts : rec->op;
+        jmax = rec->twin->op > glb_config->num_pkts ? glb_config->num_pkts : rec->twin->op;
         i = j = 0;
         ts_last = ts_start;
 
@@ -1369,9 +1454,9 @@ static void flow_record_print_json
             } else if (j >= jmax) {
                 /* twin list is exhausted, so use record */
                 dir = IN;
-                    ts = rec->pkt_time[i];
-                    pkt_len = rec->pkt_len[i];
-                    i++;
+                ts = rec->pkt_time[i];
+                pkt_len = rec->pkt_len[i];
+                i++;
             } else {
                 /* Neither list is exhausted, so use list with lowest time */
                 if (joy_timer_lt(&rec->pkt_time[i], &rec->twin->pkt_time[j])) {
@@ -1387,8 +1472,8 @@ static void flow_record_print_json
                 }
             }
 
-            joy_timer_sub(&ts, &ts_last, &tmp);
-            print_bytes_dir_time(ctx, pkt_len, dir, tmp, "");
+            joy_timer_sub(&ts, &ts_last, &ts_tmp);
+            print_bytes_dir_time(ctx, pkt_len, dir, ts_tmp, "");
             ts_last = ts;
 
             if (!((i == imax) & (j == jmax))) {
@@ -1400,10 +1485,10 @@ static void flow_record_print_json
     }
 
     if (glb_config->byte_distribution || glb_config->report_entropy || glb_config->compact_byte_distribution) {
-        const unsigned int *array = NULL;
-        const unsigned int *compact_array = NULL;
-        unsigned int tmp[256];
-        unsigned int compact_tmp[16];
+        const uint32_t *array = NULL;
+        const uint32_t *compact_array = NULL;
+        uint32_t tmp[256];
+        uint32_t compact_tmp[16];
         unsigned int num_bytes;
         double mean = 0.0, variance = 0.0;
 
@@ -1506,12 +1591,12 @@ static void flow_record_print_json
         if (rec->twin) {
             score = classify(rec->pkt_len, rec->pkt_time, rec->twin->pkt_len, rec->twin->pkt_time,
                                      rec->start, rec->twin->start,
-                                     NUM_PKT_LEN, rec->key.sp, rec->key.dp, rec->np, rec->twin->np, rec->op, rec->twin->op,
+                                     glb_config->num_pkts, rec->key.sp, rec->key.dp, rec->np, rec->twin->np, rec->op, rec->twin->op,
                                      rec->ob, rec->twin->ob, glb_config->byte_distribution,
                                      rec->byte_count, rec->twin->byte_count);
         } else {
             score = classify(rec->pkt_len, rec->pkt_time, NULL, NULL,   rec->start, rec->start,
-                                     NUM_PKT_LEN, rec->key.sp, rec->key.dp, rec->np, 0, rec->op, 0,
+                                     glb_config->num_pkts, rec->key.sp, rec->key.dp, rec->np, 0, rec->op, 0,
                                      rec->ob, 0, glb_config->byte_distribution,
                                      rec->byte_count, NULL);
         }
@@ -1632,7 +1717,6 @@ static void flow_record_print_and_delete (joy_ctx_data *ctx, flow_record_t *reco
      */
     flow_record_print_json(ctx, record);
 
-#ifndef JOY_LIB_API
     /*
      * Export this record before deletion if running in
      * IPFIX exporter mode.
@@ -1640,12 +1724,11 @@ static void flow_record_print_and_delete (joy_ctx_data *ctx, flow_record_t *reco
     if (glb_config->ipfix_export_port) {
         ipfix_export_main(ctx, record);
     }
-#endif
     /*
      * Delete twin, if there is one
      */
     if (record->twin != NULL) {
-        debug_printf("LIST deleting twin\n");
+        joy_log_debug("LIST deleting twin\n");
         flow_record_delete(ctx, record->twin);
     }
 
@@ -1665,15 +1748,20 @@ static void flow_record_print_and_delete (joy_ctx_data *ctx, flow_record_t *reco
  */
 void flow_record_export_as_ipfix (joy_ctx_data *ctx, unsigned int export_type) {
     flow_record_t *record = NULL;
+    flow_record_t *next_record = NULL;
 
     /* The head of chrono record list */
     record = ctx->flow_record_chrono_first;
 
     while (record != NULL) {
+        /* setup next record */
+        next_record = record->time_next;
+
         if (export_type == JOY_EXPIRED_FLOWS) {
             /* Avoid printing flows that might still be active */
             if (!flow_record_is_expired(ctx,record)) {
-                break;
+                record = next_record;
+                continue;
             }
         }
 
@@ -1689,7 +1777,7 @@ void flow_record_export_as_ipfix (joy_ctx_data *ctx, unsigned int export_type) {
          * Delete twin, if there is one
          */
         if (record->twin != NULL) {
-            debug_printf("LIST deleting twin\n");
+            joy_log_debug("LIST deleting twin\n");
             flow_record_delete(ctx, record->twin);
         }
 
@@ -1698,7 +1786,7 @@ void flow_record_export_as_ipfix (joy_ctx_data *ctx, unsigned int export_type) {
         flow_record_delete(ctx, record);
 
         /* Advance to next record on chrono list */
-        record = ctx->flow_record_chrono_first;
+        record = next_record;
     }
 }
 
@@ -1713,15 +1801,20 @@ void flow_record_export_as_ipfix (joy_ctx_data *ctx, unsigned int export_type) {
  */
 void flow_record_list_print_json (joy_ctx_data *ctx, unsigned int print_type) {
     flow_record_t *record = NULL;
+    flow_record_t *next_record = NULL;
 
     /* The head of chrono record list */
     record = ctx->flow_record_chrono_first;
 
     while (record != NULL) {
+        /* setup next record */
+        next_record = record->time_next;
+
         if (print_type == JOY_EXPIRED_FLOWS) {
             /* Avoid printing flows that might still be active */
             if (!flow_record_is_expired(ctx,record)) {
-                break;
+                record = next_record;
+                continue;
             }
         }
 
@@ -1729,7 +1822,7 @@ void flow_record_list_print_json (joy_ctx_data *ctx, unsigned int print_type) {
         flow_record_print_and_delete(ctx, record);
 
         /* Advance to next record on chrono list */
-        record = ctx->flow_record_chrono_first;
+        record = next_record;
     }
 
     // note: we might need to call flush in the future
@@ -1747,11 +1840,6 @@ void flow_record_list_print_json (joy_ctx_data *ctx, unsigned int print_type) {
  */
 void remove_record_and_update_list(joy_ctx_data *ctx, flow_record_t *rec)
 {
-    /* sanity check */
-    if ((ctx == NULL) || (rec == NULL)) {
-        return;
-    }
-
     /* Delete twin, if there is one */
     if (rec->twin != NULL) {
         flow_record_delete(ctx, rec->twin);
@@ -1766,31 +1854,46 @@ void remove_record_and_update_list(joy_ctx_data *ctx, flow_record_t *rec)
 /**
  * \brief Get the twin of a flow_key.
  *
- * \param key A flow_key that we will try to find it's twin
+ * \param ctx Joy context to use for the lookup
+ * \param key flow_key that we will try to find it's twin
+ * \param key_hash hash array to look in for the twin
  *
  * \return The twin flow_key, or NULL
  */
-flow_record_t *flow_key_get_twin (joy_ctx_data *ctx, const flow_key_t *key) {
+flow_record_t *flow_key_get_twin (joy_ctx_data *ctx,
+                                  const flow_key_t *key,
+                                  unsigned int key_hash) {
+    unsigned int twin_hash = 0;
+
     if (glb_config->flow_key_match_method == EXACT_MATCH) {
         flow_key_t twin;
 
         /*
-         * we use find_record_by_key() instead of find_twin_by_key(),
-         * because we are using a flow_key_hash() that depends on the
-         * entire flow key, and that hash won't work with
-         * find_twin_by_key() function because it does not map near twins
-         * to the same flow_record_list
+         * we use the passed in key_hash to determine the list because
+         * the twin will has the same hash value. we use find_record_by_key
+         * because we are searching based on the entire key.
          */
-        twin.sa.s_addr = key->da.s_addr;
-        twin.da.s_addr = key->sa.s_addr;
+        memcpy_s(&twin.sa.v6_sa, sizeof(struct in6_addr), &key->da.v6_da, sizeof(struct in6_addr));
+        memcpy_s(&twin.da.v6_da, sizeof(struct in6_addr), &key->sa.v6_sa, sizeof(struct in6_addr));
         twin.sp = key->dp;
         twin.dp = key->sp;
         twin.prot = key->prot;
+        twin_hash = flow_key_hash(&twin);
 
-        return flow_record_list_find_record_by_key(&ctx->flow_record_list_array[flow_key_hash(&twin)], &twin);
+        /* sanity check the hash calculation */
+        if (twin_hash != key_hash) {
+            joy_log_err("twin hash doesn't match: hash(%x) twin_hash(%x)", key_hash, twin_hash);
+        }
+        return flow_record_list_find_record_by_key(&ctx->flow_record_list_array[key_hash], &twin);
 
     } else {
-        return flow_record_list_find_twin_by_key(&ctx->flow_record_list_array[flow_key_hash(key)], key);
+        /*
+         * we use the passed in key_hash because in NEAR_MATCH cases, the addresses are omitted
+         * from the hash calculation. Therefore, the record and twin will have the same hash.
+         * we use find_twin_by_key because we need to at least match one address in the records
+         * to have a good chance at determining this is the NAT'd twin.
+         */
+        return flow_record_list_find_twin_by_key(&ctx->flow_record_list_array[key_hash], key);
     }
 }
 
@@ -1805,8 +1908,8 @@ static int p2f_test_flow_record_list(joy_ctx_data *ctx) {
     flow_record_list list = NULL;
     flow_record_t a, b, c, d;
     flow_record_t *rp;
-    flow_key_t k1 = { { 0xcafe }, { 0xbabe }, 0xfa, 0xce, 0xdd };
-    flow_key_t k2 = { { 0xdead }, { 0xbeef }, 0xfa, 0xce, 0xdd };
+    flow_key_t k1 = { { {0xcafe} }, { {0xbabe} }, 0xfa, 0xce, 0xdd };
+    flow_key_t k2 = { { {0xdead} }, { {0xbeef} }, 0xfa, 0xce, 0xdd };
     int num_fails = 0;
 
     flow_record_init(ctx, &a, &k1);
@@ -1931,8 +2034,8 @@ int upload_can_run = 0;
 /** filename to be uploaded */
 char upload_filename[MAX_FILENAME_LENGTH];
 
-static int uploader_send_file (char *filename, char *servername,
-                               char *key, unsigned int retain) {
+static int uploader_send_file (char *filename, const char *servername,
+                               const char *key, unsigned int retain) {
     int rc = 0;
     char cmd[MAX_UPLOAD_CMD_LENGTH];
 
@@ -1967,12 +2070,16 @@ static int uploader_send_file (char *filename, char *servername,
  * \param ptr always a pointer to the config structure
  * \return never return and the thread terminates when joy exits
  */
-void *uploader_main(void *ptr)
+#ifdef WIN32
+__declspec(noreturn) void *uploader_main(void *ptr)
+#else
+__attribute__((__noreturn__)) void *uploader_main(void *ptr)
+#endif
 {
-    struct configuration *config = ptr;
+    configuration_t *config = ptr;
 
     /* initialize the uploader filename container */
-    memset(upload_filename, 0x00, MAX_FILENAME_LENGTH);
+    memset_s(upload_filename, MAX_FILENAME_LENGTH, 0x00, MAX_FILENAME_LENGTH);
 
     /* uploader stays alive until joy exists */
     while (1) {
@@ -1985,18 +2092,17 @@ void *uploader_main(void *ptr)
         }
 
         /* upload file now */
-        if (strlen(upload_filename) > 0) {
+        if (strnlen_s(upload_filename, MAX_FILENAME_LENGTH) > 0) {
             joy_log_info("uploading file [%s] ...", upload_filename);
             uploader_send_file(upload_filename, config->upload_servername,
                                config->upload_key, config->retain_local);
         }
 
         /* we are done uploading the file, go back to sleep */
-        memset(upload_filename, 0x00, MAX_FILENAME_LENGTH);
+        memset_s(upload_filename, MAX_FILENAME_LENGTH, 0x00, MAX_FILENAME_LENGTH);
         upload_can_run = 0;
         pthread_mutex_unlock(&upload_in_process);
     }
-    return NULL;
 }
 
 /*
@@ -2019,7 +2125,7 @@ int upload_file (char *filename) {
 
     /* wake up the uploader thread so it can do its work */
     pthread_mutex_lock(&upload_in_process);
-    memcpy(upload_filename, filename, (MAX_FILENAME_LENGTH-1));
+    memcpy_s(upload_filename, MAX_FILENAME_LENGTH-1, filename, (MAX_FILENAME_LENGTH-1));
     upload_can_run = 1;
     pthread_cond_signal(&upload_run_cond);
     pthread_mutex_unlock(&upload_in_process);

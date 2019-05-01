@@ -1,6 +1,6 @@
 /*
  *	
- * Copyright (c) 2016-2018 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -44,6 +44,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdbool.h>
+
 #ifdef WIN32
 #include "win_types.h"
 #endif
@@ -57,44 +59,47 @@
 #define COMPACT_BD_MAP_MAX 16
 
 #define NULL_KEYWORD "none"
-
+#define NULL_KEYWORD_LEN 4
+ 
 enum SALT_algorithm {
-  reserved = 0,
-  raw = 1,
-  aggregated = 2,
-  defragmented = 3,
-  rle = 4
+  raw = 0,
+  aggregated = 1,
+  defragmented = 2,
+  rle = 3
 };
 
 /** structure for the configuration parameters */
-struct configuration {
-    unsigned int bidir;
-    unsigned int include_zeroes;
-    unsigned int include_retrans;
-    unsigned int byte_distribution;
-    unsigned int report_entropy;
-    unsigned int report_hd;
-    unsigned int report_exe;
-    unsigned int include_classifier;
-    unsigned int idp;
-    unsigned int promisc;
-    unsigned int num_pkts;
-    unsigned int type;           /*!< 1=SPLT, 2=SALT */
-    unsigned int retain_local;
-    uint32_t max_records;
-    unsigned int nfv9_capture_port;
-    unsigned int ipfix_collect_port;
-    unsigned int ipfix_collect_online;
-    unsigned int ipfix_export_port;
-    unsigned int ipfix_export_remote_port;
-    unsigned int flow_key_match_method;
-    unsigned int preemptive_timeout;
-    unsigned int verbosity;
-    unsigned int show_config;
-    unsigned int show_interfaces;
+typedef struct configuration {
+    bool bidir;
+    bool include_zeroes;
+    bool include_retrans;
+    bool byte_distribution;
+    bool report_entropy;
+    bool report_exe;
+    bool include_classifier;
+    bool promisc;
+
+    bool retain_local;
+    bool ipfix_collect_online;
+    bool flow_key_match_method;
+    bool show_config;
+    bool show_interfaces;
+    bool preemptive_timeout;
     enum SALT_algorithm salt_algo;
 
-  
+    uint8_t report_hd;
+    uint8_t num_pkts;
+
+    uint8_t verbosity;
+    uint8_t num_subnets;               /*!< counts entries in subnet array */
+    uint16_t ipfix_export_remote_port;
+
+
+    uint16_t idp;
+    uint16_t nfv9_capture_port;
+    uint16_t ipfix_collect_port;
+    uint16_t ipfix_export_port;
+
     declare_all_features_config_uint(feature_list) 
   
     char *compact_byte_distribution;
@@ -102,39 +107,41 @@ struct configuration {
     char *filename;              /*!< output file, if not NULL */
     char *outputdir;             /*!< directory to write output files */
     char *username;              /*!< username to become when dropping root */
-    char *logfile; 
+    char *logfile;
     char *anon_addrs_file;
     char *anon_http_file;
     char *upload_servername;
     char *upload_key;
-    char *params_url;
     char *params_file;
-    char *label_url;
     char *bpf_filter_exp;
     char *subnet[MAX_NUM_FLAGS]; /*!< max defined in radix_trie.h    */
     char *ipfix_export_remote_host;
     char *ipfix_export_template;
     char *aux_resource_path;
-    unsigned int num_subnets;    /*!< counts entries in subnet array */
-    unsigned short compact_bd_mapping[COMPACT_BD_MAP_MAX];
+
+    bool updater_on;
+    uint8_t num_threads;
+    uint32_t max_records;
+    uint16_t compact_bd_mapping[COMPACT_BD_MAP_MAX];
+
     radix_trie_t rt;
-};
+} configuration_t;
 
 
 /** set the defaults for the joy open source */
-void config_set_defaults(struct configuration *config);
+void config_set_defaults(configuration_t *config);
 
 /** set the configuration items from a file */
-int config_set_from_file(struct configuration *config, const char *fname);
+int config_set_from_file(configuration_t *config, const char *fname);
 
 /** set the configuration items from command line arguments */
-int config_set_from_argv(struct configuration *config, char *argv[], int argc);
+int config_set_from_argv(configuration_t *config, char *argv[], int argc);
 
 /** print out the configuration */
-void config_print(FILE *f, const struct configuration *c);
+void config_print(FILE *f, const configuration_t *c);
 
 /** print out the configuration in JSON format */
-void config_print_json(zfile f, const struct configuration *c);
+void config_print_json(zfile f, const configuration_t *c);
 
-struct configuration *glb_config;
+extern configuration_t *glb_config;
 #endif /* CONFIG_H */

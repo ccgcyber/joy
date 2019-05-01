@@ -1,6 +1,6 @@
 /*
  *	
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2018 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -41,36 +41,11 @@
  */
 
 #include "hdr_dsc.h"
-#include <string.h> 
+#include "safe_lib.h"
 #include "p2f.h"
 
 /** maximum number of description headers */
 #define MAX_NUM_HDRS 10
-
-#if 0 /* this code not yet used */
-
-/*
- * packet format description
- */
-#define FD_NONE  0
-#define FD_CONST 1
-#define FD_INCR  2
-
-struct format_element {
-    unsigned char type;
-    unsigned char length;
-};
-
-#define FD_MAX      16
-#define FD_DATA_MAX 32 
-
-struct format_description {
-    struct format_element element[FD_MAX];
-    unsigned char data[FD_DATA_MAX];
-};
-
-#endif
-
 
 /**
  * \fn void header_description_init (header_description_t *hd)
@@ -79,9 +54,9 @@ struct format_description {
  */
 void header_description_init (header_description_t *hd) {
     if (hd != NULL) {
-        memset(hd->const_value, 0, sizeof(hd->const_value));
-        memset(hd->const_mask, 0, sizeof(hd->const_mask));
-        memset(hd->seq_mask, 0, sizeof(hd->seq_mask));
+        memset_s(hd->const_value, sizeof(hd->const_value), 0, sizeof(hd->const_value));
+        memset_s(hd->const_mask, sizeof(hd->const_mask), 0, sizeof(hd->const_mask));
+        memset_s(hd->seq_mask, sizeof(hd->seq_mask), 0, sizeof(hd->seq_mask));
         hd->num_headers_seen = 0;
     }
 }
@@ -95,9 +70,9 @@ void header_description_init (header_description_t *hd) {
  */
 void header_description_set_initial (header_description_t *hd, const void *packet, unsigned int len) {
     if ((hd != NULL) && (packet != NULL)) {
-        memcpy(hd->initial, packet, len);
-        memcpy(hd->const_value, packet, len);
-        memset(hd->const_mask, 0xff, sizeof(hd->const_mask));
+        memcpy_s(hd->initial, len, packet, len);
+        memcpy_s(hd->const_value, len, packet, len);
+        memset_s(hd->const_mask,  sizeof(hd->const_mask), 0xff, sizeof(hd->const_mask));
         hd->num_headers_seen = 1;
     }
 }
@@ -121,7 +96,7 @@ void header_description_set (header_description_t *hd, const void *packet, unsig
      * find constant part of header, and set the constant mask and value
      * in the header description
      */
-    for (i=0; i<len; i++) {
+    for (i=0; i<(int)len; i++) {
         hd->const_mask[i] &= ~(hd->const_value[i] ^ p[i]);
         hd->const_value[i] = hd->const_mask[i] & p[i];
     }

@@ -68,6 +68,10 @@ Joy is alpha/beta software; we hope that you use it and benefit
 from it, but do understand that it is not suitable for production
 use.
 
+#### TLS Fingerprinting
+
+We have recently released the largest and most informative open source [TLS fingerprint database](https://github.com/cisco/joy/blob/master/fingerprinting/resources/fingerprint_db.json.gz). Among other features, our approach builds on previous work by being fully automated and annotating TLS fingerprints with significantly more information.  We have built a set of python tools to enable the application of this database, as well as the generation of new databases with the help of Joy. For more information, please see the [TLS fingerprinting documentation](https://github.com/cisco/joy/blob/master/doc/using-joy-fingerprinting-00.pdf).
+
 #### Relation to Cisco ETA
 
 Joy has helped support the research that paved the way for Cisco’s Encrypted
@@ -85,16 +89,39 @@ This package was written by David McGrew, Blake Anderson, Philip Perricone
 and Bill Hudson {mcgrew,blaander,phperric,bhudson}@cisco.com of Cisco Systems
 Advanced Security Research Group (ASRG) and Security and Trust Organization (STO).
 
-### Release 2.0
+### Release 4.3.0
+* Add IPv6 support to Joy and libjoy
+* IPFix collection and export only support IPv4
+* NFv9 only supports IPv4
+* Anonymization only supports IPv4 addresses
+* Subnet labeling only supports IPv4 addresses
 
-We are pleased to announce the 2.0 release of the package, which has these features:
-* The JSON schema has been updated to be better organized, more readable, and more searchable (by putting searchable keywords as the JSON names),
-* The new sleuth tool replaces query/joyq, and brings new functionality such as —fingerprint, 
-* Much improved documentation, which covers the joy and sleuth tools, examples, and the JSON schema
-(see [using-joy](https://github.com/cisco/joy/blob/master/doc/using-joy-05.pdf))
+### Release 4.2.0
+* Re-write joy.c to use libjoy library
+* Updated joy.c to utilize multi-threads for flow processing
+* Updated unit tests and python tests to reflect new code changes
+* Removed guts of the updater process to prepare for re-write
+* Fixed bug in processing multiple files on the command line
+* Other minor bug fixes
 
-We hope that you find it useful!
-- the Joy Team
+### Release 4.0.3
+* Added support for make install for Centos
+
+### Release 4.0.2
+* Add support for fingerprinting
+
+### Release 4.0.1
+We are pleased to announce the 4.0.1 release of the package, which has these features:
+* Add additional API's for parent application processing of Flow Records and data features
+* Fixed TCP retransmission and out of order detection
+* Better identification of IDP packet
+* Fixed some memory usage issues
+* Fixed minor bugs
+* Removed dead code
+
+### Release 4.0.0
+We are pleased to announce the 4.0.0 release of the package, which has these features:
+* Add support for building with autotools. ./configure;make clean;make
 
 ### Release 3.0.0
 We are pleased to announce the 3.0.0 release of the package, which has these features:
@@ -112,6 +139,14 @@ We are pleased to announce the 3.0.0 release of the package, which has these fea
 * Modified build_pkg to accept package version on the command line.
 * Cleaned up coverity errors and warnings.
 * Various bug fixes.
+
+### Release 2.0
+
+We are pleased to announce the 2.0 release of the package, which has these features:
+* The JSON schema has been updated to be better organized, more readable, and more searchable (by putting searchable keywords as the JSON names),
+* The new sleuth tool replaces query/joyq, and brings new functionality such as —fingerprint, 
+* Much improved documentation, which covers the joy and sleuth tools, examples, and the JSON schema
+(see [using-joy](https://github.com/cisco/joy/blob/master/doc/using-joy-05.pdf))
 
 ## Quick Start
 

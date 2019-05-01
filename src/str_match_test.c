@@ -1,6 +1,6 @@
 /*
  *
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,8 +39,11 @@
  *
  * \brief unit test for multiple string matching functions
  */
+#ifdef HAVE_CONFIG_H
+#include "joy_config.h"
+#endif
+
 #include <stdarg.h>
-#include <string.h>
 
 #if !defined(DARWIN) && !defined(WIN32)
 #include <malloc.h>
@@ -54,7 +57,7 @@
 
 zfile output = NULL;
 
-static void matches_print (struct matches *matches, char *text) {
+static void matches_print (struct matches *matches, const char *text) {
     unsigned int i;
     char tmp[1024];
 
@@ -64,13 +67,13 @@ static void matches_print (struct matches *matches, char *text) {
         if (len >= 1024) {
             return;
         }
-        memcpy(tmp, text + matches->start[i], len);
+        memcpy_s(tmp, len, text + matches->start[i], len);
         tmp[len] = '\0';
         printf("match %d: %s\n", i, tmp);
     }
 }
 
-static void anon_print (zfile f, struct matches *matches, char *text) {
+static void anon_print (zfile f, struct matches *matches, const char *text) {
     unsigned int i;
 
     if (matches->count == 0) {
@@ -80,7 +83,7 @@ static void anon_print (zfile f, struct matches *matches, char *text) {
 
     zprintf_nbytes(f, text, matches->start[0]);   /* nonmatching */
     for (i=0; i < matches->count; i++) {
-        zprintf_anon_nbytes(f, text + matches->start[i], matches->stop[i] - matches->start[i] + 1);   /* matching */
+        zprintf_anon_nbytes(f, matches->stop[i] - matches->start[i] + 1);   /* matching */
         if (i < matches->count-1) {
             zprintf_nbytes(f, text + matches->stop[i] + 1, matches->start[i+1] - matches->stop[i] - 1); /* nonmatching */
         } else {
@@ -90,56 +93,53 @@ static void anon_print (zfile f, struct matches *matches, char *text) {
 }
 
 
-static void str_match_test (str_match_ctx ctx, char *search) {
+static void str_match_test (str_match_ctx ctx, const char *search) {
     struct matches matches;
 
     str_match_ctx_find_all_longest(ctx, (const unsigned char *)search, strlen(search), &matches);
   
-    matches_print(&matches, (char *)search);
+    matches_print(&matches, search);
 
     zprintf(output, "text being searched:   %s\n", search);  
     zprintf(output, "anonymized string:     ");
-    anon_print(output, &matches, (char *)search);
+    anon_print(output, &matches, search);
     zprintf(output, "\n");
     zprintf(output, "anonymized uri string: ");
-    anon_print_uri(output, &matches, (char *)search);
+    anon_print_uri(output, &matches, search);
     zprintf(output, "anonymized string: ");
-    anon_print_uri_pseudonym(output, &matches, (char *)search);
+    anon_print_uri_pseudonym(output, &matches, search);
     zprintf(output, "\n");
-    zprintf_usernames(output, &matches, (char *)search, is_special, NULL);
+    zprintf_usernames(output, &matches, search, is_special, NULL);
     zprintf(output, "\n");
-    zprintf_usernames(output, &matches, (char *)search, is_special, anon_string);
+    zprintf_usernames(output, &matches, search, is_special, anon_string);
     zprintf(output, "\n");
 }
 
-static char *text = "prefix middle suffix prefixmiddle middlesuffix prefixmiddlesuffix frogers2 velmad vdinkey";
+static const char *text = "prefix middle suffix prefixmiddle middlesuffix prefixmiddlesuffix frogers2 velmad vdinkey";
 
-static char *text2 = "EXAMPLE TEXT WITH prefix AND middle BUT NOT suffix HAS prefixmiddle THIS middlesuffix TEST TEST prefixmiddlesuffix, IPSO FACTO frogers2 BLAHvelmadBLAH BLAHvdinkey EXCELSIOR";
+static const char *text2 = "EXAMPLE TEXT WITH prefix AND middle BUT NOT suffix HAS prefixmiddle THIS middlesuffix TEST TEST prefixmiddlesuffix, IPSO FACTO frogers2 BLAHvelmadBLAH BLAHvdinkey EXCELSIOR";
 
-static char *text3 = "/root/shaggy/blahvelmablah/query?username=fred;subject=daphne;docname=blahscooby;alt=scoobyblah;path=velma";
+static const char *text3 = "/root/shaggy/blahvelmablah/query?username=fred;subject=daphne;docname=blahscooby;alt=scoobyblah;path=velma";
 
 //static char *text4 = "/pca3.crl";
-static char *text4 = "/bg/api/Pickup.ashx?c={%22c%22:%225a9760de94b24d3c806a6400e76571fe%22,%22s%22:%2210.241.40.128%22}&m=[]&_=1458318857011";
+static const char *text4 = "/bg/api/Pickup.ashx?c={%22c%22:%225a9760de94b24d3c806a6400e76571fe%22,%22s%22:%2210.241.40.128%22}&m=[]&_=1458318857011";
 
 /**
  * \fn int main (int argc, char* argv[])
  * \brief main entry point for string matching tests
- * \param argc command line argument count
- * \param argv command line arguments
  * \return -1 error
  * \return EXIT_FAILURE
  * \return 0
  */
-int main (int argc, char* argv[]) {
+int main (void) {
     str_match_ctx ctx;
     int rc = 0;
     joy_init_t init_data;
 
     /* setup the joy options we want */
-    memset(&init_data, 0x00, sizeof(joy_init_t));
+    memset_s(&init_data, sizeof(joy_init_t), 0x00, sizeof(joy_init_t));
 
    /* this setup is for general processing */
-    init_data.type = 1;
     init_data.verbosity = 4;
 
     /* intialize joy */
@@ -164,7 +164,11 @@ int main (int argc, char* argv[]) {
         fprintf(stderr, "error: could not allocate string matching context\n");
         return -1;
     }
+#ifdef HAVE_CONFIG_H
     if (str_match_ctx_init_from_file(ctx, "test/misc/userid-example.txt", NULL) != 0) {
+#else
+    if (str_match_ctx_init_from_file(ctx, "../test/misc/userid-example.txt", NULL) != 0) {
+#endif
         fprintf(stderr, "error: could not init string matching context from file\n");
         exit(EXIT_FAILURE);
     }

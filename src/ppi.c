@@ -44,7 +44,7 @@
 
 #include <stdio.h>  
 #include <stdlib.h>
-#include <string.h>   /* for memset()    */
+#include "safe_lib.h"
 #include "pkt.h"      /* for tcp macros  */
 #include "utils.h"    /* for joy_role_e   */
 #include "config.h"
@@ -126,9 +126,10 @@ void ppi_update (struct ppi *ppi,
             ppi->pkt_info[ppi->np].time = header->ts;
         }
             if (opt_len) {
-                memcpy(ppi->pkt_info[ppi->np].opts, 
-                       (char*)tcp_start + 20, 
-                       opt_len > TCP_OPT_LEN ? TCP_OPT_LEN : opt_len);
+                memcpy_s(ppi->pkt_info[ppi->np].opts,
+                         opt_len > TCP_OPT_LEN ? TCP_OPT_LEN : opt_len,
+                         (const char*)tcp_start + 20, 
+                         opt_len > TCP_OPT_LEN ? TCP_OPT_LEN : opt_len);
             } 
             ppi->np++;
         } 
@@ -311,6 +312,10 @@ void tcp_opt_print_json(zfile f,
     /* Pointer to option data and calculate length */
         data = opt + 2;
         datalen = optlen - 2;
+        if (datalen > total_len) {
+            /* malformed option, defensive code here to prevent overflow */
+            datalen = 0;
+        }
         
         zprintf(f, "{");
         switch(*opt) {
@@ -321,7 +326,7 @@ void tcp_opt_print_json(zfile f,
             if (datalen != 2) {
             tcp_opt_malformed_print_json(f, *opt, data, datalen);
             } else {
-                const uint16_t *mss = (uint16_t*)data;
+                const uint16_t *mss = (const uint16_t*)data;
             zprintf(f, "\"mss\":%u", ntohs(*mss));
             }
         break;
@@ -340,7 +345,7 @@ void tcp_opt_print_json(zfile f,
             if (datalen != 8) {
             tcp_opt_malformed_print_json(f, *opt, data, datalen);
             } else {
-                const uint32_t *tsval = (uint32_t*)data;
+                const uint32_t *tsval = (const uint32_t*)data;
                 const uint32_t *tsecr = tsval + 1;
             zprintf(f, "\"ts\":{\"val\":%u,\"ecr\":%u}", ntohl(*tsval), ntohl(*tsecr));
             }
@@ -382,7 +387,7 @@ static void pkt_info_process(zfile f,
                              struct timeval ts) {
     long int rseq, rack;
     char flags_string[9];
-    char *dir = "?";
+    const char *dir = "?";
     struct timeval tmp;
 
     if (pkt_info->flags & TCP_SYN) {
@@ -454,10 +459,10 @@ static void pkt_info_print_interleaved(zfile f,
     
     unsigned int i, j, imax, jmax;
     struct timeval ts_last;
-    struct tcp_state tcp_state = { 0, };
-    struct tcp_state rev_tcp_state = { 0, };
+    struct tcp_state tcp_state = {0, 0};
+    struct tcp_state rev_tcp_state = {0,0};
 
-    imax = np  > NUM_PKT_LEN ? NUM_PKT_LEN : np;
+    imax = np  > glb_config->num_pkts ? glb_config->num_pkts : np;
 
     if (pkt_info2 == NULL) {  /* unidirectional tcp flow, no interleaving needed */
 
@@ -483,7 +488,7 @@ static void pkt_info_print_interleaved(zfile f,
             ts_last = pkt_info2[0].time;
         }
 
-        jmax = np2 > NUM_PKT_LEN ? NUM_PKT_LEN : np2;
+        jmax = np2 > glb_config->num_pkts ? glb_config->num_pkts : np2;
         if (!imax || !jmax) {
           return;   /* nothing to output */
         }

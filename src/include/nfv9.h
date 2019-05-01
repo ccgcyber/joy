@@ -1,6 +1,6 @@
 /*
  *	
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2018 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -40,7 +40,7 @@
  *
  */
 #include <stdio.h>
-#include <string.h>
+#include "safe_lib.h"
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -272,7 +272,7 @@ enum nfv9_type {
 
 
 struct nfv9_field_type {
-    char *FieldName;
+    const char *FieldName;
     u_short Value;
     u_short Length;
 };
@@ -401,7 +401,7 @@ struct template_handler {
     struct nfv9_template template;
     template_handler_func func;
     struct template_handler *next; 
-}x;
+};
 
 #define nfv9_template_field(a) ((struct nfv9_template_field) {a, 0})
 #define nfv9_template_field_len(a,b) ((struct nfv9_template_field) {a, b})

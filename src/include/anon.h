@@ -60,7 +60,6 @@
 
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <openssl/aes.h>
 #include "err.h"
 #include "output.h"
 #include "str_match.h"
@@ -79,8 +78,11 @@ enum anon_mode {
 /** maximum number of subnets that can be anonymized */
 #define MAX_ANON_SUBNETS 256
 
+/** anonymize buffer length */
+#define IPV4_ANON_LEN 33
+
 /** prototype for character operations */
-typedef int (*char_selector)(char *ptr);
+typedef int (*char_selector)(const char *ptr);
 
 /** stucture used for anonimzed subnets */
 typedef struct {
@@ -98,33 +100,36 @@ joy_status_e anon_init(const char *pathname, FILE *logfile);
 int anon_print_subnets(FILE *f);
 
 /** \brief converts an address into an anonymized string */
-char *addr_get_anon_hexstring(const struct in_addr *a);
+void addr_get_anon_hexstring(const struct in_addr *a, char *buffer, int size);
 
 /** \brief determines if address is to be anonymized */
 unsigned int ipv4_addr_needs_anonymization(const struct in_addr *a);
 
 /** \brief initialize the http anonymization */
-joy_status_e anon_http_init(const char *pathname, FILE *logfile, enum anon_mode mode, char *anon_keyfile);
+joy_status_e anon_http_init(const char *pathname, FILE *logfile, enum anon_mode mode, const char *anon_keyfile);
 
-/** \brief prints out '*' for length of the string */
-void zprintf_anon_nbytes(zfile f, char *s, size_t len);
+/** \brief cleanup the http anonymization structure */
+void anon_http_ctx_cleanup(void);
+
+/** \brief prints out '*' for length */
+void zprintf_anon_nbytes(zfile f, size_t len);
 
 /** \brief prints out number of bytes specified */
-void zprintf_nbytes(zfile f, char *s, size_t len);
+void zprintf_nbytes(zfile f, const char *s, size_t len);
 
 /** \brief prints out URI with or without anonymization depending on URI status */
-void anon_print_uri(zfile f, struct matches *matches, char *text);
+void anon_print_uri(zfile f, struct matches *matches, const char *text);
 
 /** \brief finds special characters in email addresses */
-int email_special_chars(char *ptr);
+int email_special_chars(const char *ptr);
 
 /** \brief determines if characters are special or not */
-int is_special(char *ptr);
+int is_special(const char *ptr);
 
 /** \brief prints out a string with or without anonymization depending on matching criteria */
 void anon_print_string(zfile f, 
 		       struct matches *matches, 
-		       char *text, 
+		       const char *text, 
 		       char_selector selector, 
 		       string_transform transform);
 
@@ -135,15 +140,15 @@ joy_status_e anon_string(const char *s, unsigned int len, char *hex, unsigned in
 joy_status_e deanon_string(const char *hexinput, unsigned int len, char *s, unsigned int outlen);
 
 /** \brief prints a URI anonymized if applicable */
-void anon_print_uri_pseudonym(zfile f, struct matches *matches, char *text);
+void anon_print_uri_pseudonym(zfile f, struct matches *matches, const char *text);
 
 /** \brief prints usersnames anonymized if applicable */
-void zprintf_usernames(zfile f, struct matches *matches, char *text, char_selector selector, string_transform transform);
+void zprintf_usernames(zfile f, struct matches *matches, const char *text, char_selector selector, string_transform transform);
 
 /** \brief initializes the key used for anonymization routines */
-joy_status_e key_init(char *ANON_KEYFILE);
+joy_status_e key_init(const char *ANON_KEYFILE);
 
 /** \brief anonymization unit test main entry point */
-int anon_unit_test();
+int anon_unit_test(void);
 
 #endif /* ANON_H */

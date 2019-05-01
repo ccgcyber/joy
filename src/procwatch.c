@@ -1,6 +1,6 @@
 /*
  *	
- * Copyright (c) 2016-2018 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,6 @@
   *
   * \brief process watcher implementation
   */
-
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -47,6 +46,7 @@
 #include <dirent.h>
 #include <stdio.h>
 #include <errno.h>
+#include "safe_lib.h"
 #include "p2f.h"
 #include "config.h"
 #include "procwatch.h"
@@ -66,7 +66,6 @@
 #endif
 
 #include <ctype.h> 
-#include <string.h> 
 #include <stdlib.h> 
 #include "p2f.h"
 #include "err.h" 
@@ -102,8 +101,8 @@ int calculate_sha256_hash(unsigned char* path, unsigned char *output)
 	return -1;
     }
     
-    memset(hash, 0x00, SHA256_DIGEST_LENGTH);
-    memset(&sha256, 0x00, sizeof(SHA256_CTX));
+    memset_s(hash,  SHA256_DIGEST_LENGTH, 0x00, SHA256_DIGEST_LENGTH);
+    memset_s(&sha256,  sizeof(SHA256_CTX), 0x00, sizeof(SHA256_CTX));
     SHA256_Init(&sha256);
     
     buffer = calloc(1, bufSize);
@@ -132,7 +131,7 @@ int calculate_sha256_hash(unsigned char* path, unsigned char *output)
     return 0;
 }
 
-static void host_flow_table_init() {
+static void host_flow_table_init(void) {
     int i;
 
     for (i = 0; i < HOST_PROC_FLOW_TABLE_LEN; ++i) {
@@ -144,13 +143,14 @@ static void host_flow_table_init() {
 	    free(host_proc_flow_table_array[i].file_version);
 	if (host_proc_flow_table_array[i].hash != NULL)
 	    free(host_proc_flow_table_array[i].hash);
-	memset(&host_proc_flow_table_array[i], 0, sizeof(host_flow_t));
+	memset_s(&host_proc_flow_table_array[i],  sizeof(host_flow_t),0, sizeof(host_flow_t));
     }
 }
 
 static char *get_previous_hash_by_path (char *path) {
     int i;
     host_flow_t *record = NULL;
+    int cmp_ind;
     
     if (path == NULL) {
 	return NULL;
@@ -160,7 +160,7 @@ static char *get_previous_hash_by_path (char *path) {
 	record = &host_proc_flow_table_array[i];
 	/* see if we have a matching full path */
 	if (record->full_path) {
-	    if ((strcmp(record->full_path, path) == 0) &&
+	    if (((strcmp_s(record->full_path, PROC_PATH_LEN, path, &cmp_ind) == EOK) && cmp_ind == 0) &&
 		(record->hash != NULL)) {
 		return record->hash;
 	    }
@@ -179,20 +179,21 @@ static host_flow_t *get_host_flow (flow_key_t *key) {
     int i;
     flow_key_t empty_key;
     host_flow_t *record = NULL;
+    int cmp_ind;
     
     if (key == NULL) {
 	return NULL;
     }
     
-    memset(&empty_key, 0, sizeof(flow_key_t));
+    memset_s(&empty_key, sizeof(flow_key_t), 0, sizeof(flow_key_t));
     for (i = 0; i < HOST_PROC_FLOW_TABLE_LEN; ++i) {
 	record = &host_proc_flow_table_array[i];
-	if (memcmp(&(record->key), key, sizeof(flow_key_t)) == 0) {
+	if ((memcmp_s(&(record->key), sizeof(flow_key_t), key, sizeof(flow_key_t), &cmp_ind) == EOK) && cmp_ind == 0) {
 	    return record;
 	}
-	else if (memcmp(&(record->key), &empty_key, sizeof(flow_key_t)) == 0) {
+	else if ((memcmp_s(&(record->key),  sizeof(flow_key_t), &empty_key, sizeof(flow_key_t), &cmp_ind) == EOK) && cmp_ind == 0) {
 	    // found an empty slot
-	    memcpy(&(record->key), key, sizeof(flow_key_t));
+	    memcpy_s(&(record->key), sizeof(flow_key_t), key, sizeof(flow_key_t));
 	    return record;
 	}
     }
@@ -210,32 +211,54 @@ static int print_flow_table() {
     flow_key_t empty_key;
     host_flow_t *record;
     char ipv4_addr[INET_ADDRSTRLEN];
+    char ipv6_addr[INET6_ADDRSTRLEN];
+    int cmp_ind;
     
     
-    memset(&empty_key, 0, sizeof(flow_key_t));
+    memset_s(&empty_key, sizeof(flow_key_t), 0, sizeof(flow_key_t));
     for (i = 0; i < HOST_PROC_FLOW_TABLE_LEN; ++i) {
 	record = &host_proc_flow_table_array[i];
-	if (memcmp(&(record->key), &empty_key, sizeof(flow_key_t)) == 0) {
+	if (memcmp_s(&(record->key), sizeof(flow_key_t) &empty_key, sizeof(flow_key_t), &cmp_ind) == EOK) && cmp_ind == 0) {
 	    //end of entires in table
 	    break;
 	}
 #ifdef WIN32
-	inet_ntop(AF_INET, &record->key.sa, ipv4_addr, INET_ADDRSTRLEN);
-	strcpy_s(szAddr, sizeof(szAddr), ipv4_addr);
+        if (record->ip-type == ETH_TYPE_IPV6) {
+	    inet_ntop(AF_INET6, &record->key.sa.v6_sa, ipv6_addr, INET6_ADDRSTRLEN);
+	    strcpy_s(szAddr, sizeof(szAddr), ipv6_addr, sizeof(szAddr)-1);
+        } else {
+	    inet_ntop(AF_INET, &record->key.sa.v4_sa, ipv4_addr, INET_ADDRSTRLEN);
+	    strcpy_s(szAddr, sizeof(szAddr), ipv4_addr, sizeof(szAddr)-1);
+        }
 #else
-	inet_ntop(AF_INET, &record->key.sa, ipv4_addr, INET_ADDRSTRLEN);
-	strncpy(szAddr, ipv4_addr, sizeof(szAddr));
+        if (record->ip-type == ETH_TYPE_IPV6) {
+	    inet_ntop(AF_INET6, &record->key.sa.v6_sa, ipv6_addr, INET6_ADDRSTRLEN);
+	    strncpy_s(szAddr, sizeof(szAddr), ipv6_addr, sizeof(szAddr)-1);
+        } else {
+	    inet_ntop(AF_INET, &record->key.sa.v4_sa, ipv4_addr, INET_ADDRSTRLEN);
+	    strncpy_s(szAddr, sizeof(szAddr), ipv4_addr, sizeof(szAddr)-1);
+        }
 #endif
 	printf("\t========================\n");
 	printf("\tTABLE Local Addr: %s\n", szAddr);
 	printf("\tTABLE Local Port: %d \n", ntohs(record->key.sp));
 	
 #ifdef WIN32
-	inet_ntop(AF_INET, &record->key.da, ipv4_addr, INET_ADDRSTRLEN);
-	strcpy_s(szAddr, sizeof(szAddr), ipv4_addr);
+        if (record->ip-type == ETH_TYPE_IPV6) {
+	    inet_ntop(AF_INET6, &record->key.da.v6_da, ipv6_addr, INET6_ADDRSTRLEN);
+	    strcpy_s(szAddr, sizeof(szAddr), ipv6_addr, sizeof(szAddr)-1);
+        } else {
+	    inet_ntop(AF_INET, &record->key.da.v4_da, ipv4_addr, INET_ADDRSTRLEN);
+	    strcpy_s(szAddr, sizeof(szAddr), ipv4_addr, sizeof(szAddr)-1);
+        }
 #else
-	inet_ntop(AF_INET, &record->key.da, ipv4_addr, INET_ADDRSTRLEN);
-	strncpy(szAddr, ipv4_addr, sizeof(szAddr));
+        if (record->ip-type == ETH_TYPE_IPV6) {
+	    inet_ntop(AF_INET, &record->key.da.v6_da, ipv6_addr, INET6_ADDRSTRLEN);
+	    strncpy_s(szAddr, sizeof(szAddr), ipv6_addr, sizeof(szAddr)-1);
+        } else {
+	    inet_ntop(AF_INET, &record->key.da.v4_da, ipv4_addr, INET_ADDRSTRLEN);
+	    strncpy_s(szAddr, sizeof(szAddr), ipv4_addr, sizeof(szAddr)-1);
+        }
 #endif
 	printf("\tTABLE Remote Addr: %s\n", szAddr);
 	printf("\tTABLE Remote Port: %d\n", ntohs(record->key.dp));
@@ -299,7 +322,7 @@ void process_get_file_version(host_flow_t *record) {
 			    // Doesn't matter if you are on 32 bit or 64 bit,
 			    // DWORD is always 32 bits, so first two revision numbers
 			    // come from dwFileVersionMS, last two come from dwFileVersionLS
-			    memset(record->file_version, 0, PROC_EXE_LEN);
+			    memset_s(record->file_version, PROC_EXE_LEN, 0, PROC_EXE_LEN);
 			    snprintf(record->file_version, PROC_EXE_LEN, "%d.%d.%d.%d",
 				     (verInfo->dwFileVersionMS >> 16) & 0xffff,
 				     (verInfo->dwFileVersionMS >> 0) & 0xffff,
@@ -345,10 +368,9 @@ void get_process_info(HANDLE hProcessSnap, unsigned long pid, host_flow_t *recor
 	    // store data we have already
 	    record->threads = pe32.cntThreads;
 	    record->parent_pid = pe32.th32ParentProcessID;
-	    record->exe_name = calloc(1, strlen(pe32.szExeFile) + 1);
+	    record->exe_name = calloc(1, strnlen_s(pe32.szExeFile, 128 ) + 1);
 	    if (record->exe_name != NULL) {
-		memset(record->exe_name, 0, (strlen(pe32.szExeFile) + 1));
-		strncpy(record->exe_name, pe32.szExeFile, strlen(pe32.szExeFile));
+		strncpy_s(record->exe_name, strnlen_s(pe32.szExeFile, 128), pe32.szExeFile, strnlen_s(pe32.szExeFile, 128)-1);
 	    }
 	    
 	    // Retrieve the full path name class.
@@ -368,7 +390,7 @@ void get_process_info(HANDLE hProcessSnap, unsigned long pid, host_flow_t *recor
 		    record->hash = calloc(1, 2 * SHA256_DIGEST_LENGTH + 1);
 		    if (record->hash != NULL) {
 			if (prev_hash) {
-			    strcpy(record->hash,prev_hash);
+			    strncpy_s(record->hash , 2 * SHA256_DIGEST_LENGTH + 1, prev_hash, strnlen_s(prev_hash, PROC_PATH_LEN);
 			} else {
 			    calculate_sha256_hash(record->full_path, record->hash);
 			}
@@ -411,6 +433,7 @@ int host_flow_table_add_tcp(int all_sockets) {
     host_flow_t *record = NULL;
     int i;
     
+    joy_log_debug("Parameter sockets values (%d)",all_sockets);
     // Take a snapshot of all processes in the system.
     hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hProcessSnap == INVALID_HANDLE_VALUE)
@@ -521,7 +544,7 @@ static unsigned long get_process_uptime (unsigned long pid) {
 
         /* process ps output 1 line at a time */
         rc = fscanf(ps_file,"%lu %s\n",&ps_pid,dummy_string);
-        if ((pid == ps_pid) && (strlen(dummy_string) > 0)) {
+        if ((pid == ps_pid) && (strnlen_s(dummy_string, PID_MAX_LEN) > 0)) {
             int got_hours = 0;
             int got_mins = 0;
             int got_secs = 0;
@@ -530,7 +553,7 @@ static unsigned long get_process_uptime (unsigned long pid) {
              * not all fields are always present, so process from
              * the back of the string.
              */
-            s = dummy_string + strlen(dummy_string);
+            s = dummy_string + strnlen_s(dummy_string, PID_MAX_LEN);
             while (s >= dummy_string) {
                 if (s == dummy_string) {
                     if (got_hours) {
@@ -589,8 +612,8 @@ static void get_pid_path_hash (host_flow_t *hf) {
     char buffer[BUF_SIZE];
 
     /* clean out buffers */
-    memset(exe_name, 0x00, PID_MAX_LEN);
-    memset(buffer, 0x00, BUF_SIZE);
+    memset_s(exe_name, PID_MAX_LEN, 0x00, PID_MAX_LEN);
+    memset_s(buffer, BUF_SIZE, 0x00, BUF_SIZE);
 
     /* find the pid link */
     snprintf(exe_name,PID_MAX_LEN,"/proc/%lu/exe",hf->pid);
@@ -598,16 +621,16 @@ static void get_pid_path_hash (host_flow_t *hf) {
     if (len > 0) {
         /* got the link which has the full path */
         buffer[len] = '\0';
-        hf->full_path = calloc(1, strlen(buffer)+1);
+        hf->full_path = calloc(1, strnlen_s(buffer, BUF_SIZE)+1);
         if (hf->full_path) {
             char *prev_hash = NULL;
 
-            strcpy(hf->full_path,buffer);
+            strncpy_s(hf->full_path, strnlen_s(buffer, BUF_SIZE)+1, buffer, strnlen_s(buffer, BUF_SIZE));
             prev_hash = get_previous_hash_by_path(hf->full_path);
             hf->hash = calloc(1, 2 * SHA256_DIGEST_LENGTH + 1);
             if (hf->hash != NULL) {
                 if (prev_hash) {
-                    strcpy(hf->hash,prev_hash);
+                    strncpy_s(hf->hash,  2 * SHA256_DIGEST_LENGTH + 1, prev_hash,  strnlen_s(buffer, BUF_SIZE));
                 } else {
                     calculate_sha256_hash((unsigned char*)hf->full_path, (unsigned char*)hf->hash);
                 }
@@ -617,7 +640,7 @@ static void get_pid_path_hash (host_flow_t *hf) {
 }
 
 static void process_pid_string (struct ss_flow *fr, char *string) {
-    char *s = string;
+    char *s = NULL;
 
     /* search to beginning of the app name */
     s = strstr(string,"\"");
@@ -635,7 +658,7 @@ static void process_pid_string (struct ss_flow *fr, char *string) {
     *s = '\0'; //Set to null
 
     /* copy app name into the flow record */
-    strncpy(fr->command, string, PROC_PATH_LEN-1);
+    strncpy_s(fr->command,  PROC_PATH_LEN, string, PROC_PATH_LEN-1);
 
     /* skip over to the pid */
     s += 6;
@@ -644,7 +667,7 @@ static void process_pid_string (struct ss_flow *fr, char *string) {
 }
 
 static void process_addr_string (int which, struct ss_flow *fr, char *string) {
-    char *s = string;
+    char *s = NULL;
 
     /* find the end of the ip address */
     s = strstr(string,":");
@@ -678,6 +701,7 @@ static void host_flow_table_add_tcp (unsigned int all_sockets) {
     host_flow_t *hf = NULL;
     FILE *ss_file;
 
+    joy_log_debug("passed in parameter all sockets (%d)", all_sockets);
     ss_file = popen(SS_COMMAND, "r");
     if (ss_file == NULL) {
         joy_log_err("popen returned null (command(%d): %s)\n", rc, SS_COMMAND);
@@ -690,7 +714,11 @@ static void host_flow_table_add_tcp (unsigned int all_sockets) {
     /* process ss data */
     while (1) {
         /* clean out the ss flow record */
-        memset(&fr,0x00,sizeof(struct ss_flow));
+        memset_s(&fr, sizeof(struct ss_flow), 0x00, sizeof(struct ss_flow));
+        memset_s(src_string, ADDR_MAX_LEN, 0x00, ADDR_MAX_LEN);
+        memset_s(dst_string, ADDR_MAX_LEN, 0x00, ADDR_MAX_LEN);
+        memset_s(pid_string, PID_MAX_LEN, 0x00, PID_MAX_LEN);
+        memset_s(dummy_string,PID_MAX_LEN, 0x00, PID_MAX_LEN);
 
         /* process ss output 1 line at a time */
         rc = fscanf(ss_file,"%s %d %d %s %s %s\n", dummy_string,&dummy_int,&dummy_int,src_string,dst_string,pid_string);
@@ -700,9 +728,9 @@ static void host_flow_table_add_tcp (unsigned int all_sockets) {
         hf = get_host_flow(&fr.key);
         if (hf != NULL) {
             hf->pid = fr.pid;
-            if (strlen(fr.command)) {
-                hf->exe_name = calloc(1, strlen(fr.command)+1);
-                strcpy(hf->exe_name,fr.command);
+            if (strnlen_s(fr.command, PROC_PATH_LEN)) {
+                hf->exe_name = calloc(1, strnlen_s(fr.command, PROC_PATH_LEN)+1);
+                strncpy_s(hf->exe_name, strnlen_s(fr.command, PROC_PATH_LEN)+1, fr.command, strnlen_s(fr.command, PROC_PATH_LEN));
             }
             hf->uptime_seconds = get_process_uptime(hf->pid);
             get_pid_path_hash(hf);
@@ -826,15 +854,16 @@ char* get_full_path_from_pid (long pid) {
     int ret;
     char *pbuf = NULL;
     char pathbuf[PROC_PIDPATHINFO_MAXSIZE];
+    int pathbuf_len = 0;
 
     ret = proc_pidpath(pid, pathbuf, sizeof(pathbuf));
     if ( ret <= 0 ) {
         return NULL;
     }
-
-    pbuf = calloc(1, strlen(pathbuf)+1);
+    pathbuf_len = strnlen_s(pathbuf, PROC_PIDPATHINFO_MAXSIZE)+1;
+    pbuf = calloc(1, pathbuf_len);
     if (pbuf != NULL) {
-        strcpy(pbuf,pathbuf);
+        strncpy_s(pbuf, pathbuf_len, pathbuf, pathbuf_len-1);
     }
     return(pbuf);
 }
@@ -849,7 +878,7 @@ char* get_application_version (char* full_path) {
     char *ver_string = NULL;
 
     /* get length of the file path */
-    full_length = strlen(full_path);
+    full_length = strnlen(full_path, PLIST_FILE_MAX);
 
     /* search from the back to front for the .app/ designation */
     for (i=full_length; i > 0; --i) {
@@ -871,9 +900,9 @@ char* get_application_version (char* full_path) {
             return NULL;
         }
         /* setup the plist file name */
-        memset(plist_file, 0x00, PLIST_FILE_MAX);
-        strncpy(plist_file,full_path,found_base);
-        strcat(plist_file,".app/Contents/Info.plist");
+        memset_s(plist_file, PLIST_FILE_MAX, 0x00, PLIST_FILE_MAX);
+        strncpy_s(plist_file, PLIST_FILE_MAX, full_path,found_base);
+        strncat_s(plist_file, PLIST_FILE_MAX, ".app/Contents/Info.plist", (PLIST_FILE_MAX-found_base));
 
         /* setup the command to retireve the version info */
         ver_cmd = calloc(1, found_base + 100);
@@ -900,6 +929,7 @@ void lsof_process_output(struct lsof_flow *fr, char *s, int sockets) {
     host_flow_t *hf = NULL;
     enum lsof_status status;
     char srcAddr[BUFSIZE];
+    int cmp_ind;
 
     while (*s != '\n') {
         switch (*s) {
@@ -908,15 +938,18 @@ void lsof_process_output(struct lsof_flow *fr, char *s, int sockets) {
                 status = lsof_set_addrs_ports(fr, &s);
                 if (status == lsof_got_flow) { 
                     inet_ntop(AF_INET, &fr->key.sa, srcAddr, BUFSIZE);
-                    if ((strcmp(srcAddr,"127.0.0.1") != 0) || sockets) {
+                    if (((strcmp_s(srcAddr, 10, "127.0.0.1", &cmp_ind) != EOK) || cmp_ind != 0) || sockets) {
                         hf = get_host_flow(&fr->key);
                         if (hf != NULL) {
                             hf->pid = fr->pid;
-                            if (strlen(fr->command)) {
-                                hf->exe_name = calloc(1, strlen(fr->command)+1);
+                            if (strnlen_s(fr->command, PROC_PATH_LEN)) {
+                                hf->exe_name = calloc(1, strnlen_s(fr->command, PROC_PATH_LEN)+1);
                             }
                             if (hf->exe_name != NULL) {
-                                strcpy(hf->exe_name,fr->command);
+                                strncpy_s(hf->exe_name, strnlen_s(fr->command,
+                                                                  PROC_PATH_LEN), 
+                                                                  fr->command, 
+                                                                  strnlen_s(fr->command, PROC_PATH_LEN));
                                 hf->full_path = get_full_path_from_pid(hf->pid);
                                 if (hf->full_path) {
                                     char *prev_hash = NULL;
@@ -925,7 +958,7 @@ void lsof_process_output(struct lsof_flow *fr, char *s, int sockets) {
                                     hf->hash = calloc(1, 2 * SHA256_DIGEST_LENGTH + 1);
                                     if (hf->hash != NULL) {
                                         if (prev_hash) {
-                                            strcpy(hf->hash,prev_hash);
+                                            strncpy_s(hf->hash,  2 * SHA256_DIGEST_LENGTH + 1, prev_hash, strnlen_s(prev_hash, BUFSIZE));
                                         } else {
                                             calculate_sha256_hash((unsigned char*)hf->full_path, (unsigned char*)hf->hash);
                                         }
@@ -944,7 +977,7 @@ void lsof_process_output(struct lsof_flow *fr, char *s, int sockets) {
                 break;
             case 'c':
                 /* process name line */
-                strcpy(fr->command, (s+1));
+                strncpy_s(fr->command, PROC_PATH_LEN, (s+1), strnlen_s(s+1, PROC_PATH_LEN));
 	        return;
                 break;
 
@@ -986,7 +1019,7 @@ void read_lsof_data (int sockets) {
     }
   
     /* clean out the host flow record */
-    memset(&fr,0x00,sizeof(struct lsof_flow));
+    memset_s(&fr, sizeof(struct lsof_flow), 0x00, sizeof(struct lsof_flow));
 
     /* process lsof data */
     while (1) {
@@ -1021,16 +1054,16 @@ int get_host_flow_data(joy_ctx_data *ctx) {
     float seconds = 0.0;
     host_flow_t *record = NULL;
 
+    /* set the lock */
+    pthread_mutex_lock(&exe_lock);
+
     /* get current time and determine the delta from last refresh */
     gettimeofday(&current_time, NULL);
     joy_timer_sub(&current_time, &last_refresh_time, &delta_time);
-    seconds = (float) joy_timeval_to_milliseconds(delta_time) / 1000.0;
+    seconds = (float) (joy_timeval_to_milliseconds(delta_time) / 1000.0);
 
     /* see if we need to refresh the application process data */
     if (seconds > 45) {
-        /* we need to update the table, set the lock */
-        pthread_mutex_lock(&exe_lock);
-
         /* refresh the host data table */
         host_flow_table_init();
 
@@ -1039,10 +1072,10 @@ int get_host_flow_data(joy_ctx_data *ctx) {
 
         /* store the last refresh timestamp */
         gettimeofday(&last_refresh_time, NULL);
-
-        /* all done, remove the lock */
-        pthread_mutex_unlock(&exe_lock);
     }
+
+    /* all done, remove the lock */
+    pthread_mutex_unlock(&exe_lock);
 
 #ifdef DEBUG_PROCESS_TABLE
     /* print out the table if we want to debug anything */
@@ -1062,8 +1095,9 @@ int get_host_flow_data(joy_ctx_data *ctx) {
             /* we can stop, end of filled in entries in table */
             break;
         }
-        twin.sa = record->key.da;
-        twin.da = record->key.sa;
+        memset_s(&twin, sizeof(flow_key_t), 0x00, sizeof(flow_key_t));
+        twin.sa.v4_sa = record->key.da.v4_da;
+        twin.da.v4_da = record->key.sa.v4_sa;
         twin.sp = record->key.dp;
         twin.dp = record->key.sp;
         twin.prot = record->key.prot;

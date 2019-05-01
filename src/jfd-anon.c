@@ -1,6 +1,6 @@
 /*
  *	
- * Copyright (c) 2016-2018 Cisco Systems, Inc.
+ * Copyright (c) 2016-2019 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -48,12 +48,13 @@
  \endverbatim
  */
 #include <stdio.h>
-#include <string.h>
+#include "safe_lib.h"
 #include <stdlib.h>
 #include <ctype.h>
 #include <unistd.h>  
 #include "anon.h"
 #include "radix_trie.h"
+#include "safe_lib.h"
 
 #ifdef WIN32
 #include "Ws2tcpip.h"
@@ -68,11 +69,13 @@ size_t getline(char **lineptr, size_t *n, FILE *stream);
 
 extern str_match_ctx  usernames_ctx;
 
+static char anon_buffer[IPV4_ANON_LEN];
+
 static char *address_string_anonymize (char *addr_string) {
     struct in_addr addr;
     int l;
 
-    l = strnlen(addr_string, 256);
+    l = strnlen_s(addr_string, 256);
     if (l >= 32) {
         return addr_string;  /* probably already anonymized */
     }
@@ -85,7 +88,8 @@ static char *address_string_anonymize (char *addr_string) {
         return NULL;
     }
     if (ipv4_addr_needs_anonymization(&addr)) {
-        return addr_get_anon_hexstring(&addr);
+        addr_get_anon_hexstring(&addr, (char*)anon_buffer, IPV4_ANON_LEN);
+        return anon_buffer;
     }
     return addr_string;
 }
@@ -146,7 +150,7 @@ static void matches_print (struct matches *matches, char *text) {
         if (len >= 1024) {
             return;
         }
-        memcpy(tmp, text + matches->start[i], len);
+        memcpy_s(tmp, len, text + matches->start[i], len);
         tmp[len] = '\0';
         printf("\tmatch %d: %s\n", i, tmp);
     }
@@ -197,7 +201,7 @@ int main (int argc, char *argv[]) {
     size_t len;
     char *line = NULL;  
     joy_status_e err;
-    char *keyfile = ANON_KEYFILE_DEFAULT;
+    const char *keyfile = ANON_KEYFILE_DEFAULT;
     char *userfile = NULL;
     char *subnetfile = NULL;
     char *datafile = NULL;
@@ -281,36 +285,6 @@ int main (int argc, char *argv[]) {
      */
     while ((bytes_read = getline(&line, &len, input)) != -1) {
   
-#if 0
-        unsigned int i;
-        char *text;
-        char lhs[256];
-
-        /* remove leading whitespace */
-        i = 0;
-        text = line;
-        while (isblank(*text) && (i < len)) { 
-            text++;
-            i++;
-        } 
-
-#if 0
-        if (*text == '{') {
-            printf("{");
-        } else if (*text == '}') {
-            printf("}");
-        }
-#endif
-
-        if (sscanf(text, "%[\"a-zA-Z_{}]", lhs) > 0) {
-            printf("lhs: %s\n", lhs);
-            if (strncmp(lhs, "flow", 5) == 0) {
-	              printf("found flow\n");
-            }
-        }
-
-#else 
-
         if (type == addresses) {
             if (mode == mode_anonymize) {
 	              anon_addresses(line);
@@ -338,7 +312,6 @@ int main (int argc, char *argv[]) {
 
             }
         }
-#endif    
 
         linenum++;
 

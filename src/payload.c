@@ -1,6 +1,6 @@
 /*
  *	
- * Copyright (c) 2016 Cisco Systems, Inc.
+ * Copyright (c) 2016-2018 Cisco Systems, Inc.
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -45,7 +45,7 @@
 
 #include <stdio.h>  
 #include <stdlib.h>
-#include <string.h>
+#include "safe_lib.h"
 #include "payload.h"     
 #include "err.h"
 #include "p2f.h"    
@@ -92,13 +92,18 @@ void payload_update (struct payload *payload,
 		     unsigned int len, 
 		     unsigned int report_payload) {
     
+    /* sanity check */
     if (payload == NULL || payload->length != 0) {
 	return;
     }
+
+    joy_log_debug("payload[%p],header[%p],data[%p],len[%d],report[%d]",
+            payload,header,data,len,report_payload);
+
     if (report_payload && len) {
 	unsigned int copylen = len > JOY_PAYLOAD_LEN ? JOY_PAYLOAD_LEN : len;
 	payload->length = copylen;
-	memcpy(payload->data, data, copylen);
+	memcpy_s(payload->data, copylen, data, copylen);
     }
 }
 
