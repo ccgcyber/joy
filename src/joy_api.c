@@ -471,6 +471,8 @@ int joy_initialize(joy_init_t *init_data,
     glb_config->report_salt = ((init_data->bitmask & JOY_SALT_ON) ? 1 : 0);
     glb_config->retain_local = ((init_data->bitmask & JOY_RETAIN_LOCAL_ON) ? 1 : 0);
     glb_config->updater_on = ((init_data->bitmask & JOY_UPDATER_ON) ? 1 : 0);
+    glb_config->report_fpx = ((init_data->bitmask & JOY_FPX_ON) ? 1 : 0);
+    glb_config->include_classifier = ((init_data->bitmask & JOY_CLASSIFY_ON) ? 1 : 0);
 
     /* check if IDP option is set */
     if (init_data->bitmask & JOY_IDP_ON) {
@@ -1752,11 +1754,36 @@ void joy_splt_external_processing(uint8_t index,
         if ((rec->splt_ext_processed == 0) &&
             ((rec->op >= min_pkts) || (flow_record_is_expired(ctx,rec)))) {
 
-            /* format the SPLT data for external processing */
-            data_len = joy_splt_format_data(rec, export_frmt, data);
+            /* include classification if desired */
+            if (glb_config->include_classifier) {
+                float score = 0.0;
 
-            /* let the callback function process the flow record */
-            callback_fn(rec, data_len, data);
+                if (rec->twin) {
+                    score = classify(rec->pkt_len, rec->pkt_time, rec->twin->pkt_len, rec->twin->pkt_time,
+                                             rec->start, rec->twin->start,
+                                             glb_config->num_pkts, rec->key.sp, rec->key.dp, rec->np, rec->twin->np, rec->op, rec->twin->op,
+                                             rec->ob, rec->twin->ob, glb_config->byte_distribution,
+                                             rec->byte_count, rec->twin->byte_count);
+                    rec->twin->classify_value = score;
+                } else {
+                    score = classify(rec->pkt_len, rec->pkt_time, NULL, NULL,   rec->start, rec->start,
+                                             glb_config->num_pkts, rec->key.sp, rec->key.dp, rec->np, 0, rec->op, 0,
+                                             rec->ob, 0, glb_config->byte_distribution,
+                                             rec->byte_count, NULL);
+                    rec->classify_value = score;
+                }
+            }
+
+            if (rec->op > 0) {
+                /* format the SPLT data for external processing */
+                data_len = joy_splt_format_data(rec, export_frmt, data);
+
+                /* let the callback function process the flow record */
+                callback_fn(rec, data_len, data);
+            } else {
+                /* there are no SPLT packets to process */
+                callback_fn(rec, 0, data);
+            }
 
             /* mark the SPLT data as being processed */
             rec->splt_ext_processed = 1;

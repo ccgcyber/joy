@@ -52,7 +52,7 @@
 
 /* test program variables */
 #define NUM_PACKETS_IN_LOOP 20
-#define IP_OR_VLAN  "ip or vlan"
+#define IP_OR_VLAN  "ip or ip6 or vlan"
 
 int proc_pcap_file (unsigned long index, char *file_name) {
     int more = 1;
@@ -99,10 +99,17 @@ int proc_pcap_file (unsigned long index, char *file_name) {
 }
 
 void my_idp_callback(void *curr_rec, unsigned int data_len, unsigned char *data) {
+    unsigned int i=0;
     flow_record_t *rec = (flow_record_t *)curr_rec;
+    char *idp_data = NULL;
 
     if ((data_len == 0) && (data == NULL)) {
+        idp_data = rec->idp;
         printf("IDP len=%d\n",rec->idp_len);
+        printf("IDP Data: 0x");
+        for (i=0; i < rec->idp_len; ++i)
+            printf("%.2x",(uint8_t)*(idp_data+i));
+        printf("\n");
     }
 }
 
@@ -220,17 +227,17 @@ void *thread_main1 (void *file)
             feat_counts.salt_recs_ready, feat_counts.bd_recs_ready);
         joy_idp_external_processing(0, my_idp_callback);
         joy_tls_external_processing(0, my_tls_callback);
-        //joy_splt_external_processing(0, JOY_NFV9_EXPORT, 1, my_splt_callback);
-        joy_splt_external_processing(0, JOY_IPFIX_EXPORT, 1, my_splt_callback);
+        joy_splt_external_processing(0, JOY_NFV9_EXPORT, 1, my_splt_callback);
+        //joy_splt_external_processing(0, JOY_IPFIX_EXPORT, 1, my_splt_callback);
         //joy_salt_external_processing(0, JOY_NFV9_EXPORT, 1, my_salt_callback);
-        joy_salt_external_processing(0, JOY_IPFIX_EXPORT, 1, my_salt_callback);
+        //joy_salt_external_processing(0, JOY_IPFIX_EXPORT, 1, my_salt_callback);
         joy_bd_external_processing(0, 1, my_bd_callback);
-        recs = joy_purge_old_flow_records(0, 300);
-        printf("Thread 1 deleted %d records\n",recs);
+        //recs = joy_purge_old_flow_records(0, 300);
+        //printf("Thread 1 deleted %d records\n",recs);
         //joy_export_flows_ipfix(0, JOY_ALL_FLOWS);
         joy_print_flow_data(0, JOY_ALL_FLOWS);
-        //recs = joy_delete_flow_records(0, JOY_DELETE_ALL);
-        //printf("Thread 1 deleted %d records\n",recs);
+        recs = joy_delete_flow_records(0, JOY_DELETE_ALL);
+        printf("Thread 1 deleted %d records\n",recs);
         joy_get_feature_counts(0,&feat_counts);
         printf("Thread 1 Feature Counts:\nIDP: %d\nTLS: %d\nSPLT: %d\nSALT: %d\nBD: %d\n",
             feat_counts.idp_recs_ready, feat_counts.tls_recs_ready, feat_counts.splt_recs_ready,
@@ -312,10 +319,11 @@ int main (int argc, char **argv)
     init_data.max_records = 0;    /* max records in output file, 0 means single output file */
     init_data.num_pkts = 20;      /* report on at most 20 packets */
     init_data.contexts = 3;       /* use 3 worker contexts for processing */
-    init_data.idp = 2048;
+    init_data.idp = 1400;
     init_data.ipfix_host = "72.163.4.161";    /* Host to send IPFix data to */
     init_data.ipfix_port = 0;                 /* use default IPFix port */
-    init_data.bitmask = (JOY_HTTP_ON | JOY_TLS_ON | JOY_IDP_ON | JOY_SALT_ON | JOY_BYTE_DIST_ON);
+    //init_data.bitmask = (JOY_HTTP_ON | JOY_TLS_ON | JOY_IDP_ON | JOY_SALT_ON | JOY_BYTE_DIST_ON);
+    init_data.bitmask = (JOY_IDP_ON | JOY_BYTE_DIST_ON);
 
 #ifdef HAVE_CONFIG_H
     printf("Joy Version = %s\n", joy_get_version());
