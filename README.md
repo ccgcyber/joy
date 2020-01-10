@@ -10,6 +10,10 @@
               forensics, and security monitoring.
 [![Build Status](https://travis-ci.org/cisco/joy.svg?branch=master)](https://travis-ci.org/cisco/joy)
 
+#### TLS Fingerprinting
+
+Addendum: For our most recent network fingerprinting tools and data, please see [Mercury](https://github.com/cisco/mercury).
+
 ## Overview
 
 Joy is a BSD-licensed libpcap-based software package for extracting
@@ -88,6 +92,11 @@ training your own classifier, see saltUI/README or reach out to joy-users@cisco.
 This package was written by David McGrew, Blake Anderson, Philip Perricone
 and Bill Hudson {mcgrew,blaander,phperric,bhudson}@cisco.com of Cisco Systems
 Advanced Security Research Group (ASRG) and Security and Trust Organization (STO).
+
+### Release 4.5.0
+* Added the ability to use AF_PACKET v3 and AF_FANOUT instead of libpcap
+    use --enable-af_packet on the configure command for AF_PACKET
+* minor bug fixes
 
 ### Release 4.4.0
 * Fix SIGSEGV in DNS parsing (recursion depth bug)
